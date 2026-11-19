@@ -22,6 +22,8 @@ ctest --test-dir build --output-on-failure
 ./build/poker_bench
 ```
 Debug with sanitizers: `cmake -S . -B build-debug -DCMAKE_BUILD_TYPE=Debug -DPOKER_SANITIZE=ON`
+(ASan + UBSan on GCC/Clang; ASan only on MSVC). On Windows with the Visual Studio generator, pass
+`--config Release` to the build and `-C Release` to ctest; see README.md.
 
 Always run the build and the full test suite after a change, and fix warnings: the library is
 compiled with `-Wall -Wextra -Wpedantic -Wconversion -Wshadow`.
@@ -39,7 +41,8 @@ compiled with `-Wall -Wextra -Wpedantic -Wconversion -Wshadow`.
 - Card encoding is fixed: `index = rank * 4 + suit`, rank 0='2'…12='A', suit 0..3 = c,d,h,s.
   Card sets are `CardMask` (`uint64_t`, bit i = card index i).
 - Hot paths: no heap allocation, no exceptions, no virtual calls. Use `std::optional` for parse
-  errors at API boundaries.
+  errors at API boundaries; when the caller needs to know *why* input is invalid, return
+  `std::variant<Result, ErrorEnum>` (see `exactEquity`).
 - Every new component gets unit tests. Equity results must be checked against known reference
   values (e.g. AA vs KK preflop ≈ 81.9% / 18.1%; AKs vs QQ ≈ 46% / 54%).
 - Monte Carlo code takes an explicit seed so tests are deterministic.
@@ -48,8 +51,8 @@ compiled with `-Wall -Wextra -Wpedantic -Wconversion -Wshadow`.
 
 ## Roadmap
 1. ✅ Card representation & parsing
-2. Naive 5/7-card hand evaluator (reference implementation)
-3. Exact equity via enumeration (heads-up and multiway, with partial boards)
+2. ✅ Naive 5/7-card hand evaluator (reference implementation)
+3. ✅ Exact equity via enumeration (heads-up and multiway, with partial boards)
 4. Monte Carlo equity with seeded RNG + confidence interval reporting
 5. Fast evaluator (lookup tables / perfect hashing) — benchmark vs naive
 6. Multithreaded Monte Carlo

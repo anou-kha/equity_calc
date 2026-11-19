@@ -4,53 +4,106 @@ A fast Texas Hold'em equity calculator written in modern C++20.
 
 > 🚧 Work in progress — see the roadmap below.
 
-## Features (planned)
-- 7-card hand evaluator (naive reference + optimised lookup-table version)
-- Exact equity by enumeration and Monte Carlo equity with confidence intervals
-- Multithreaded simulation
-- Range notation (`AKs, QQ+, A5s-A2s`) and range-vs-range equity
-- CLI, and a WebAssembly build for the browser
+## Features
+- ✅ 7-card hand evaluator (naive reference implementation, verified against all 133,784,560
+  seven-card hands)
+- ✅ Exact equity by enumeration: 2–9 players, preflop/flop/turn/river, dead cards, exact split pots
+- ✅ Command-line interface
+- Planned: optimised lookup-table evaluator, Monte Carlo equity with confidence intervals,
+  multithreading, range notation (`AKs, QQ+, A5s-A2s`) and range-vs-range equity, WebAssembly build
 
 ## Build
 
-Requires CMake ≥ 3.20 and a C++20 compiler (GCC 11+, Clang 14+, or MSVC 2022).
+Requires CMake ≥ 3.20 and a C++20 compiler (GCC 11+, Clang 14+, or MSVC 2022+).
 
+**Linux / macOS**
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel
 ctest --test-dir build --output-on-failure
 ```
 
+**Windows (PowerShell, Visual Studio generator)**
+
+Visual Studio is a multi-config generator: choose the configuration when building and testing,
+and executables end up in `build\Release\`.
+```powershell
+cmake -S . -B build
+cmake --build build --config Release --parallel
+ctest --test-dir build -C Release --output-on-failure
+```
+
+**Sanitizers:** configure a Debug build with `-DPOKER_SANITIZE=ON`. With GCC/Clang this enables
+AddressSanitizer and UndefinedBehaviorSanitizer; MSVC only supports AddressSanitizer.
+
+**Slow tests:** one test checks all 133,784,560 seven-card hands and is disabled by default
+(about 10 s in Release). Run it explicitly with:
+```bash
+./build/poker_tests --gtest_also_run_disabled_tests --gtest_filter=*AllSevenCard*
+```
+
 ## Usage
 
-```bash
-./build/poker_cli AsKs QhQd        # (currently just parses and echoes cards)
-./build/poker_bench
 ```
+$ poker_cli AsKs QhQd --board Js Ts 2h
+Board: Js Ts 2h
+
+Hand           Win       Tie    Equity
+AsKs        56.06%     0.00%    56.06%
+QhQd        43.94%     0.00%    43.94%
+
+990 boards enumerated in 0.1 ms
+```
+
+- Give each player's two hole cards as one argument (`AsKs` or `"As Ks"`), for 2–9 players.
+- `--board` takes 0, 3, 4 or 5 cards; `--dead` takes cards that can't be dealt (e.g. folded or
+  exposed). Both read every following argument up to the next option, so `Js Ts 2h` and `JsTs2h`
+  both work.
+- **Equity** is the expected share of the pot: wins plus an equal share of every split pot.
+
+```
+$ poker_cli AsAh KsKh
+Board: (none)
+
+Hand           Win       Tie    Equity
+AsAh        82.36%     0.54%    82.64%
+KsKh        17.09%     0.54%    17.36%
+
+1712304 boards enumerated in 266.8 ms
+```
+
+Run `poker_bench` (from a Release build) for the benchmarks below.
 
 ## Benchmarks
 
-_Coming soon: hands evaluated per second, naive vs optimised evaluator._
+Baseline numbers for the naive reference evaluator, measured on an AMD Ryzen 9 5900HS laptop
+(8 cores, single-threaded), Windows 11. Each figure is the fastest of several passes within a run;
+separate runs varied by up to about 8%. The CLI example above is a single cold run, so it is slower.
+
+| Benchmark | MSVC 19.52 (`/O2`) | GCC 15.1 (`-O3`, MSYS2) |
+|-----------|-------------------:|------------------------:|
+| Naive evaluator, 1M random 7-card hands | 8.8 M hands/s | 8.6 M hands/s |
+| Exact equity, AsAh vs KsKh preflop (1,712,304 boards) | 230 ms | 216 ms |
 
 | Evaluator | Hands/sec | Speedup |
 |-----------|-----------|---------|
-| Naive     | –         | 1×      |
+| Naive     | 8.8 M     | 1×      |
 | Optimised | –         | –       |
 
 ## Project layout
 
 ```
-include/poker/   public headers
-src/             library + CLI
+include/poker/   public headers: card.hpp, evaluator.hpp, equity.hpp
+src/             library + CLI (main.cpp)
 tests/           GoogleTest unit tests
 bench/           benchmarks
-docs/            design notes
+docs/            design notes (see docs/design.md)
 ```
 
 ## Roadmap
 - [x] Card representation & parsing
-- [ ] Naive hand evaluator
-- [ ] Exact equity (enumeration)
+- [x] Naive hand evaluator
+- [x] Exact equity (enumeration)
 - [ ] Monte Carlo equity
 - [ ] Fast evaluator + benchmarks
 - [ ] Multithreading
