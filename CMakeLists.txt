@@ -55,6 +55,7 @@ endfunction()
 # ---- Core library ----------------------------------------------------------
 add_library(poker
   src/card.cpp
+  src/equity.cpp
   src/evaluator.cpp
 )
 target_include_directories(poker PUBLIC include)
@@ -83,6 +84,7 @@ if(POKER_BUILD_TESTS)
   enable_testing()
   add_executable(poker_tests
     tests/test_card.cpp
+    tests/test_equity.cpp
     tests/test_evaluator.cpp
   )
   target_link_libraries(poker_tests PRIVATE poker GTest::gtest_main)
