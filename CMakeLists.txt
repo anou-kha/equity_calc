@@ -55,6 +55,7 @@ endfunction()
 # ---- Core library ----------------------------------------------------------
 add_library(poker
   src/card.cpp
+  src/evaluator.cpp
 )
 target_include_directories(poker PUBLIC include)
 target_compile_options(poker PRIVATE
@@ -82,6 +83,7 @@ if(POKER_BUILD_TESTS)
   enable_testing()
   add_executable(poker_tests
     tests/test_card.cpp
+    tests/test_evaluator.cpp
   )
   target_link_libraries(poker_tests PRIVATE poker GTest::gtest_main)
   # Must run before gtest_discover_tests' own post-build step, which launches the executable.
