@@ -9,9 +9,11 @@
 #include <iomanip>
 #include <iostream>
 #include <random>
+#include <variant>
 #include <vector>
 
 #include "poker/card.hpp"
+#include "poker/equity.hpp"
 #include "poker/evaluator.hpp"
 
 namespace {
@@ -63,6 +65,22 @@ void benchNaiveEvaluator() {
             << ", checksum " << checksum << ")\n";
 }
 
+void benchExactEquityPreflop() {
+  constexpr int kTimedPasses = 3;
+  const std::vector<poker::HoleCards> players = {*poker::parseHoleCards("AsAh"),
+                                                 *poker::parseHoleCards("KsKh")};
+
+  uint64_t boards = 0;
+  const double seconds = fastestPassSeconds(kTimedPasses, [&] {
+    const auto outcome = poker::exactEquity(players, 0);
+    boards = std::get<poker::EquityResult>(outcome).boards;
+  });
+
+  std::cout << "exact equity, AsAh vs KsKh preflop: " << std::fixed << std::setprecision(1)
+            << seconds * 1000.0 << " ms  (" << boards << " boards, "
+            << static_cast<double>(boards) / seconds / 1e6 << " M boards/s)\n";
+}
+
 }  // namespace
 
 int main() {
@@ -70,5 +88,6 @@ int main() {
   std::cout << "warning: this is not a Release build, so the numbers below are not meaningful\n";
 #endif
   benchNaiveEvaluator();
+  benchExactEquityPreflop();
   return 0;
 }
