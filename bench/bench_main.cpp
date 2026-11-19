@@ -1,24 +1,74 @@
-// Minimal benchmark harness (no external dependency).
-// Replace / extend with hand-evaluator and equity benchmarks as they land.
+// Benchmarks for the poker library: plain std::chrono, no external dependencies.
+//
+// Each benchmark runs one untimed warm-up pass, then several timed passes, and reports the fastest.
+// The minimum is the measurement least disturbed by other processes and timer noise; the warm-up
+// pass gets the data into the CPU caches first.
+#include <bit>
 #include <chrono>
 #include <cstdint>
+#include <iomanip>
 #include <iostream>
+#include <random>
+#include <vector>
 
 #include "poker/card.hpp"
+#include "poker/evaluator.hpp"
+
+namespace {
+
+using poker::CardMask;
+
+// A uniformly random hand of `size` distinct cards, built from the generator's raw output so the
+// same seed gives the same hands with every standard library (std::uniform_int_distribution
+// differs between them).
+CardMask randomHand(std::mt19937_64& rng, int size) {
+  CardMask hand = 0;
+  while (std::popcount(hand) < size) hand |= CardMask{1} << (rng() % poker::Card::kNumCards);
+  return hand;
+}
+
+// Runs `pass` once untimed, then `timedPasses` times, and returns the fastest pass in seconds.
+template <typename Pass>
+double fastestPassSeconds(int timedPasses, const Pass& pass) {
+  using Clock = std::chrono::steady_clock;
+  pass();
+  double fastest = 0;
+  for (int i = 0; i < timedPasses; ++i) {
+    const auto start = Clock::now();
+    pass();
+    const double seconds = std::chrono::duration<double>(Clock::now() - start).count();
+    if (i == 0 || seconds < fastest) fastest = seconds;
+  }
+  return fastest;
+}
+
+void benchNaiveEvaluator() {
+  constexpr int kHands = 1'000'000;
+  constexpr int kTimedPasses = 5;
+  constexpr uint64_t kSeed = 42;
+
+  // Generate the hands up front so only evaluation is timed.
+  std::mt19937_64 rng(kSeed);
+  std::vector<CardMask> hands(kHands);
+  for (CardMask& hand : hands) hand = randomHand(rng, 7);
+
+  // Summing the results stops the compiler from optimising the evaluation away.
+  uint64_t checksum = 0;
+  const double seconds = fastestPassSeconds(kTimedPasses, [&] {
+    for (CardMask hand : hands) checksum += poker::evaluate(hand).value();
+  });
+
+  std::cout << "naive evaluator, 7-card hands: " << std::fixed << std::setprecision(1)
+            << kHands / seconds / 1e6 << " M hands/s  (" << kHands << " hands, seed " << kSeed
+            << ", checksum " << checksum << ")\n";
+}
+
+}  // namespace
 
 int main() {
-  using clock = std::chrono::steady_clock;
-  constexpr int kIters = 10'000'000;
-
-  uint64_t sink = 0;
-  const auto start = clock::now();
-  for (int i = 0; i < kIters; ++i) {
-    sink += poker::Card::fromIndex(i % poker::Card::kNumCards).mask();
-  }
-  const auto end = clock::now();
-
-  const double secs = std::chrono::duration<double>(end - start).count();
-  std::cout << "card mask: " << static_cast<double>(kIters) / secs / 1e6 << " M ops/sec"
-            << " (sink=" << sink << ")\n";
+#ifndef NDEBUG
+  std::cout << "warning: this is not a Release build, so the numbers below are not meaningful\n";
+#endif
+  benchNaiveEvaluator();
   return 0;
 }
