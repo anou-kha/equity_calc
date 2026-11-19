@@ -14,6 +14,44 @@ option(POKER_BUILD_TESTS "Build unit tests" ON)
 option(POKER_BUILD_BENCH "Build benchmarks" ON)
 option(POKER_SANITIZE "Enable address/undefined sanitizers" OFF)
 
+# ---- Sanitizers ------------------------------------------------------------
+# This must come before any target is created: add_compile_options() only applies to targets
+# defined after it.
+if(POKER_SANITIZE)
+  if(MSVC)
+    # MSVC supports AddressSanitizer but not UBSan. ASan is incompatible with the /RTC1 runtime
+    # checks and with incremental linking, which CMake enables by default in Debug.
+    string(REPLACE "/RTC1" "" CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG}")
+    string(REPLACE "/INCREMENTAL" "/INCREMENTAL:NO" CMAKE_EXE_LINKER_FLAGS_DEBUG
+      "${CMAKE_EXE_LINKER_FLAGS_DEBUG}")
+    add_compile_options(/fsanitize=address)
+    # The ASan runtime is a DLL next to cl.exe that is not on PATH outside a Developer Command
+    # Prompt, so poker_copy_asan_runtime() copies it next to each executable.
+    if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+      set(POKER_ASAN_ARCH x86_64)
+    else()
+      set(POKER_ASAN_ARCH i386)
+    endif()
+    get_filename_component(POKER_MSVC_BIN_DIR "${CMAKE_CXX_COMPILER}" DIRECTORY)
+    set(POKER_ASAN_DLLS
+      "${POKER_MSVC_BIN_DIR}/clang_rt.asan_dynamic-${POKER_ASAN_ARCH}.dll"
+      "${POKER_MSVC_BIN_DIR}/clang_rt.asan_dbg_dynamic-${POKER_ASAN_ARCH}.dll"
+    )
+  else()
+    add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+    add_link_options(-fsanitize=address,undefined)
+  endif()
+endif()
+
+function(poker_copy_asan_runtime target)
+  foreach(dll IN LISTS POKER_ASAN_DLLS)
+    if(EXISTS "${dll}")
+      add_custom_command(TARGET ${target} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${dll}" "$<TARGET_FILE_DIR:${target}>")
+    endif()
+  endforeach()
+endfunction()
+
 # ---- Core library ----------------------------------------------------------
 add_library(poker
   src/card.cpp
@@ -24,14 +62,10 @@ target_compile_options(poker PRIVATE
   $<$<CXX_COMPILER_ID:MSVC>:/W4>
 )
 
-if(POKER_SANITIZE)
-  add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
-  add_link_options(-fsanitize=address,undefined)
-endif()
-
 # ---- CLI -------------------------------------------------------------------
 add_executable(poker_cli src/main.cpp)
 target_link_libraries(poker_cli PRIVATE poker)
+poker_copy_asan_runtime(poker_cli)
 
 # ---- Tests -----------------------------------------------------------------
 if(POKER_BUILD_TESTS)
@@ -50,6 +84,8 @@ if(POKER_BUILD_TESTS)
     tests/test_card.cpp
   )
   target_link_libraries(poker_tests PRIVATE poker GTest::gtest_main)
+  # Must run before gtest_discover_tests' own post-build step, which launches the executable.
+  poker_copy_asan_runtime(poker_tests)
   include(GoogleTest)
   gtest_discover_tests(poker_tests)
 endif()
@@ -58,4 +94,5 @@ endif()
 if(POKER_BUILD_BENCH)
   add_executable(poker_bench bench/bench_main.cpp)
   target_link_libraries(poker_bench PRIVATE poker)
+  poker_copy_asan_runtime(poker_bench)
 endif()
