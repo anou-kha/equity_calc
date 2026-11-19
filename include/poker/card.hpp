@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -49,5 +50,12 @@ using CardMask = uint64_t;
 std::optional<std::vector<Card>> parseCards(std::string_view text);
 
 CardMask toMask(const std::vector<Card>& cards);
+
+// A player's two hole cards. Using a fixed-size array means a "hand" with the wrong number of cards
+// can't be constructed at all.
+using HoleCards = std::array<Card, 2>;
+
+// Parses exactly two distinct cards, e.g. "AsKs" or "As Ks".
+std::optional<HoleCards> parseHoleCards(std::string_view text);
 
 }  // namespace poker

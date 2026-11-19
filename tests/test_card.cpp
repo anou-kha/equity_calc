@@ -53,6 +53,18 @@ TEST(ParseCards, RejectsDuplicatesAndOddLength) {
   EXPECT_FALSE(poker::parseCards("AsK"));
 }
 
+TEST(ParseHoleCards, ParsesExactlyTwoDistinctCards) {
+  const auto hole = poker::parseHoleCards("As Kd");
+  ASSERT_TRUE(hole);
+  EXPECT_EQ((*hole)[0], Card::parse("As"));
+  EXPECT_EQ((*hole)[1], Card::parse("Kd"));
+  EXPECT_TRUE(poker::parseHoleCards("AsKd"));
+  EXPECT_FALSE(poker::parseHoleCards("As"));
+  EXPECT_FALSE(poker::parseHoleCards("AsKdQh"));
+  EXPECT_FALSE(poker::parseHoleCards("AsAs"));
+  EXPECT_FALSE(poker::parseHoleCards(""));
+}
+
 TEST(ParseCards, MaskHasOneBitPerCard) {
   auto cards = poker::parseCards("JsTs2h");
   ASSERT_TRUE(cards);

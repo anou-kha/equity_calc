@@ -57,4 +57,10 @@ CardMask toMask(const std::vector<Card>& cards) {
   return m;
 }
 
+std::optional<HoleCards> parseHoleCards(std::string_view text) {
+  const auto cards = parseCards(text);  // already rejects duplicates
+  if (!cards || cards->size() != 2) return std::nullopt;
+  return HoleCards{(*cards)[0], (*cards)[1]};
+}
+
 }  // namespace poker
