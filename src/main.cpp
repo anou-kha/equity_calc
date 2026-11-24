@@ -25,6 +25,7 @@
 
 #include "poker/card.hpp"
 #include "poker/equity.hpp"
+#include "poker/evaluator.hpp"
 #include "poker/monte_carlo.hpp"
 
 namespace {
@@ -106,6 +107,14 @@ std::string cardsToString(const std::vector<poker::Card>& cards) {
   return text.empty() ? "(none)" : text;
 }
 
+// "69.0 ms", or "0.041 ms" for times under a millisecond, which would otherwise print as "0.0".
+std::string milliseconds(double seconds) {
+  const double ms = seconds * 1000.0;
+  std::ostringstream out;
+  out << std::fixed << std::setprecision(ms < 1.0 ? 3 : 1) << ms << " ms";
+  return out.str();
+}
+
 std::string percent(double fraction) {
   std::ostringstream out;
   out << std::fixed << std::setprecision(2) << 100.0 * fraction << '%';
@@ -157,8 +166,7 @@ int runExact(const Options& options) {
 
   const auto& result = std::get<poker::EquityResult>(outcome);
   printTable(options, result, {});
-  std::cout << result.boards << " boards enumerated in " << std::fixed << std::setprecision(1)
-            << seconds * 1000.0 << " ms\n";
+  std::cout << result.boards << " boards enumerated in " << milliseconds(seconds) << '\n';
   return 0;
 }
 
@@ -178,7 +186,7 @@ int runMonteCarlo(const Options& options) {
   }
   printTable(options, result.counts, margins);
   std::cout << "Monte Carlo: " << monteCarlo.trials << " random boards (seed " << monteCarlo.seed
-            << ") in " << std::fixed << std::setprecision(1) << seconds * 1000.0 << " ms\n"
+            << ") in " << milliseconds(seconds) << '\n'
             << "The true equity is within the margin for 95% of seeds.\n";
   return 0;
 }
@@ -192,5 +200,8 @@ int main(int argc, char** argv) {
   }
   const auto options = parseOptions(argc, argv);
   if (!options) return 1;
+  // Build the evaluator's lookup tables (a few ms, once) before any timing starts, so the reported
+  // time measures only the equity calculation.
+  poker::buildEvaluatorTables();
   return options->trials ? runMonteCarlo(*options) : runExact(*options);
 }
