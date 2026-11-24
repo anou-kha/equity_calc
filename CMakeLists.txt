@@ -13,6 +13,8 @@ endif()
 option(POKER_BUILD_TESTS "Build unit tests" ON)
 option(POKER_BUILD_BENCH "Build benchmarks" ON)
 option(POKER_SANITIZE "Enable address/undefined sanitizers" OFF)
+option(POKER_TSAN "Enable ThreadSanitizer (GCC/Clang only; can't be combined with POKER_SANITIZE)"
+  OFF)
 
 # ---- Sanitizers ------------------------------------------------------------
 # This must come before any target is created: add_compile_options() only applies to targets
@@ -41,6 +43,20 @@ if(POKER_SANITIZE)
     add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
     add_link_options(-fsanitize=address,undefined)
   endif()
+endif()
+
+# ThreadSanitizer detects data races: two threads touching the same memory without
+# synchronisation, at least one of them writing. It needs its own build because it can't be
+# combined with AddressSanitizer, and MSVC doesn't provide it.
+if(POKER_TSAN)
+  if(MSVC)
+    message(FATAL_ERROR "POKER_TSAN: ThreadSanitizer isn't available with MSVC; use GCC or Clang")
+  endif()
+  if(POKER_SANITIZE)
+    message(FATAL_ERROR "POKER_TSAN can't be combined with POKER_SANITIZE (ASan and TSan conflict)")
+  endif()
+  add_compile_options(-fsanitize=thread -fno-omit-frame-pointer)
+  add_link_options(-fsanitize=thread)
 endif()
 
 function(poker_copy_asan_runtime target)
