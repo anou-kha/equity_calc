@@ -7,7 +7,8 @@
 //
 // Trade-off: this does a little work per rank and per category on every call, which is slow
 // compared with lookup-table evaluators, but every step maps directly onto a poker rule. That makes
-// it a trustworthy reference for testing the fast evaluator later.
+// it a trustworthy reference: the fast evaluator (fast_evaluator.cpp) builds its tables with it and
+// is tested against it.
 #include "poker/evaluator.hpp"
 
 #include <array>
@@ -164,7 +165,7 @@ std::string kickers(HandRank rank, int first, int count) {
 
 }  // namespace
 
-HandRank evaluate(CardMask cards) {
+HandRank evaluateNaive(CardMask cards) {
   assert(std::popcount(cards) >= 5 && std::popcount(cards) <= 7);
   const CardSummary s = summarize(cards);
   const RankSet flush = flushRanks(s);

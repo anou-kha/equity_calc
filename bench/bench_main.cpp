@@ -58,7 +58,7 @@ void benchNaiveEvaluator() {
   // Summing the results stops the compiler from optimising the evaluation away.
   uint64_t checksum = 0;
   const double seconds = fastestPassSeconds(kTimedPasses, [&] {
-    for (CardMask hand : hands) checksum += poker::evaluate(hand).value();
+    for (CardMask hand : hands) checksum += poker::evaluateNaive(hand).value();
   });
 
   std::cout << "naive evaluator, 7-card hands: " << std::fixed << std::setprecision(1)

@@ -57,6 +57,7 @@ add_library(poker
   src/card.cpp
   src/equity.cpp
   src/evaluator.cpp
+  src/fast_evaluator.cpp
   src/monte_carlo.cpp
   src/random.cpp
   src/showdown.cpp
