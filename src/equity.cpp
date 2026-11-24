@@ -44,24 +44,29 @@ struct Totals {
   uint64_t boards = 0;
 };
 
-// A task for the threads: the first few missing cards are fixed (`cards`), and the task enumerates
-// every way to choose the rest from deck.cards[next..].
+// Part of a task for the threads: the deck positions of the first few missing cards. The task
+// enumerates every way to choose the rest from positions next, next + 1, ... Positions rather than
+// cards, because each deal leaves a different deck (but always one of the same size).
 struct Prefix {
-  CardMask cards = 0;
+  std::array<size_t, 2> positions{};
+  size_t length = 0;
   size_t next = 0;
 };
 
-// Splits the enumeration into tasks, one for every way of choosing the first `length` of the
-// `missing` cards (in deck order, leaving room for the rest). Together they cover every board
+// One prefix for every way of choosing the first `length` of the `missing` cards from a deck of
+// `deckSize` cards (in deck order, leaving room for the rest). Together they cover every board
 // exactly once, like the outer loops of forEachCombination.
-void addPrefixes(const detail::Deck& deck, size_t missing, size_t length, size_t first,
-                 CardMask cards, std::vector<Prefix>& prefixes) {
-  if (length == 0) {
-    prefixes.push_back({cards, first});
+void addPrefixes(size_t deckSize, size_t missing, size_t length, size_t first, Prefix prefix,
+                 std::vector<Prefix>& prefixes) {
+  if (prefix.length == length) {
+    prefix.next = first;
+    prefixes.push_back(prefix);
     return;
   }
-  for (size_t i = first; i + missing <= deck.size; ++i) {
-    addPrefixes(deck, missing - 1, length - 1, i + 1, cards | deck.cards[i], prefixes);
+  for (size_t i = first; i + (missing - prefix.length) <= deckSize; ++i) {
+    Prefix longer = prefix;
+    longer.positions[longer.length++] = i;
+    addPrefixes(deckSize, missing, length, i + 1, longer, prefixes);
   }
 }
 
@@ -114,6 +119,10 @@ std::string_view toString(EquityError error) {
       return "not enough cards left to complete the board";
     case EquityError::kNoTrials:
       return "Monte Carlo needs at least 1 trial";
+    case EquityError::kEmptyRange:
+      return "a range has no hands left once the board and dead cards are taken out";
+    case EquityError::kNoValidDeal:
+      return "the ranges can't all be dealt at once (they need the same cards)";
   }
   return "unknown error";
 }
@@ -121,34 +130,56 @@ std::string_view toString(EquityError error) {
 std::variant<EquityResult, EquityError> exactEquity(std::span<const HoleCards> players,
                                                     CardMask board, CardMask dead,
                                                     const ExactOptions& options) {
+  // Validate known hands with their own, more specific errors (e.g. kDuplicateCard rather than
+  // kNoValidDeal), then treat each hand as a range of one.
   if (const auto error = detail::validateDeal(players, board, dead)) return *error;
+  return exactEquity(detail::singleHandRanges(players), board, dead, options);
+}
 
-  const detail::Seats seats = detail::seatPlayers(players);
-  const detail::Deck deck = detail::remainingDeck(board | dead | seats.allHoleCards);
-  const size_t missing = detail::missingBoardCards(board);
+std::variant<EquityResult, EquityError> exactEquity(std::span<const Range> players, CardMask board,
+                                                    CardMask dead, const ExactOptions& options) {
+  const auto prepared = detail::liveHands(players, board, dead);
+  if (const auto* error = std::get_if<EquityError>(&prepared)) return *error;
+  const auto& hands = std::get<detail::LiveHands>(prepared);
+
+  std::vector<detail::Seats> deals;
+  detail::forEachDeal(hands, [&](const detail::Seats& seats) {
+    deals.push_back(seats);
+    return true;
+  });
+  if (deals.empty()) return detail::noValidDealError(players);
+
   const size_t numPlayers = players.size();
+  const size_t missing = detail::missingBoardCards(board);
+  const auto deckSize = static_cast<size_t>(detail::cardsLeftAfterDeal(board, dead, numPlayers));
 
-  // Split the boards into tasks by their first two missing cards (heads-up preflop: 990 tasks).
-  // Splitting by just the first card would give only 44 tasks, and the biggest (178,365 boards,
-  // over 10% of the work) would leave the other threads waiting at the end; with two cards the
-  // biggest task is under 1%. The tasks come out largest first, which also helps keep the threads
-  // evenly loaded. A complete board (nothing missing) is a single task.
+  // Tasks are (deal, prefix) pairs, where a prefix fixes the first two missing cards (heads-up
+  // preflop: 990 prefixes per deal). Splitting by just the first card would give only 44 tasks
+  // for a known hand, and the biggest (178,365 boards, over 10% of the work) would leave the other
+  // threads waiting at the end; with two cards the biggest task is under 1%. A complete board
+  // (nothing missing) is a single prefix.
   const size_t prefixLength = std::min<size_t>(missing, 2);
-  std::vector<Prefix> tasks;
-  addPrefixes(deck, missing, prefixLength, 0, 0, tasks);
+  std::vector<Prefix> prefixes;
+  addPrefixes(deckSize, missing, prefixLength, 0, Prefix{}, prefixes);
+  const uint64_t numTasks = deals.size() * prefixes.size();
 
-  const uint64_t boards = binomial(deck.size, missing);
+  const uint64_t boards = deals.size() * binomial(deckSize, missing);
   const unsigned threads = detail::threadCount(
       options.threads,
-      std::min<uint64_t>(tasks.size(), std::max<uint64_t>(1, boards / kMinBoardsPerThread)));
+      std::min<uint64_t>(numTasks, std::max<uint64_t>(1, boards / kMinBoardsPerThread)));
 
   const auto perThread =
-      detail::runInParallel<Totals>(tasks.size(), threads, [&](uint64_t task, Totals& totals) {
+      detail::runInParallel<Totals>(numTasks, threads, [&](uint64_t task, Totals& totals) {
+        const detail::Seats& deal = deals[static_cast<size_t>(task / prefixes.size())];
+        const Prefix& prefix = prefixes[static_cast<size_t>(task % prefixes.size())];
+        const detail::Deck deck = detail::remainingDeck(board | dead | deal.allHoleCards);
+        CardMask prefixCards = 0;
+        for (size_t i = 0; i < prefix.length; ++i) prefixCards |= deck.cards[prefix.positions[i]];
+
         const std::span<PlayerResult> counts(totals.players.data(), numPlayers);
-        const Prefix& prefix = tasks[static_cast<size_t>(task)];
-        forEachCombination(deck, missing - prefixLength, prefix.next, board | prefix.cards,
+        forEachCombination(deck, missing - prefixLength, prefix.next, board | prefixCards,
                            [&](CardMask fullBoard) {
-                             detail::addToCounts(detail::showdown(fullBoard, seats.holeMasks()),
+                             detail::addToCounts(detail::showdown(fullBoard, deal.holeMasks()),
                                                  counts);
                              ++totals.boards;
                            });
@@ -156,12 +187,30 @@ std::variant<EquityResult, EquityError> exactEquity(std::span<const HoleCards> p
 
   EquityResult result;
   result.players.resize(numPlayers);
+  result.deals = deals.size();
   result.threads = static_cast<unsigned>(perThread.size());
   for (const Totals& totals : perThread) {
     detail::addCounts(std::span(totals.players.data(), numPlayers), result.players);
     result.boards += totals.boards;
   }
   return result;
+}
+
+uint64_t exactShowdowns(std::span<const Range> players, CardMask board, CardMask dead,
+                        uint64_t limit) {
+  const auto prepared = detail::liveHands(players, board, dead);
+  if (std::holds_alternative<EquityError>(prepared)) return 0;
+  const auto& hands = std::get<detail::LiveHands>(prepared);
+
+  // Every deal is completed by the same number of boards, so count deals, stopping as soon as the
+  // total passes the limit.
+  const auto deckSize =
+      static_cast<uint64_t>(detail::cardsLeftAfterDeal(board, dead, hands.size()));
+  const uint64_t boardsPerDeal = binomial(deckSize, detail::missingBoardCards(board));
+  const uint64_t maxDeals = limit / boardsPerDeal;
+  uint64_t deals = 0;
+  detail::forEachDeal(hands, [&](const detail::Seats&) { return ++deals <= maxDeals; });
+  return deals * boardsPerDeal;
 }
 
 }  // namespace poker

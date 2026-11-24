@@ -53,4 +53,12 @@ std::variant<MonteCarloResult, EquityError> monteCarloEquity(std::span<const Hol
                                                              CardMask board, CardMask dead,
                                                              const MonteCarloOptions& options);
 
+// The same for players holding ranges. Each trial first deals every player a hand from their range
+// (hands that use a board or dead card are left out), giving every valid combination of hands the
+// same chance, then deals the rest of the board. A known hand is a range with one hand: it uses no
+// random numbers, so known hands give exactly the same results as the HoleCards version.
+std::variant<MonteCarloResult, EquityError> monteCarloEquity(std::span<const Range> players,
+                                                             CardMask board, CardMask dead,
+                                                             const MonteCarloOptions& options);
+
 }  // namespace poker

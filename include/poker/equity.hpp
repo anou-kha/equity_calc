@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "poker/card.hpp"
+#include "poker/range.hpp"
 
 namespace poker {
 
@@ -27,10 +28,11 @@ struct PlayerResult {
 
 struct EquityResult {
   std::vector<PlayerResult> players;  // in the order the players were given
-  uint64_t boards = 0;                // number of board completions enumerated
+  uint64_t boards = 0;                // showdowns scored: deals x board completions (or trials)
+  uint64_t deals = 0;                 // exact only: ways of dealing the players' hands (1 if known)
   unsigned threads = 1;               // how many threads did the work
 
-  // Fractions of all boards, in [0, 1].
+  // Fractions of all showdowns, in [0, 1].
   double win(size_t player) const;
   double tie(size_t player) const;
   // The player's expected share of the pot: wins, plus their split of each tied pot.
@@ -45,6 +47,10 @@ enum class EquityError {
   kDuplicateCard,   // the same card appears twice among hole cards, board and dead cards
   kNotEnoughCards,  // the dead cards leave too few cards to complete the board
   kNoTrials,        // Monte Carlo was asked for 0 trials
+  kEmptyRange,      // a range has no hands left once the board and dead cards are removed
+  kNoValidDeal,     // the ranges can't all be dealt at once (e.g. AA against AA against AA)
+  // For ranges of a single (known) hand, those two cases are reported as kDuplicateCard, just as
+  // by the HoleCards versions.
 };
 
 std::string_view toString(EquityError error);
@@ -56,13 +62,29 @@ struct ExactOptions {
   unsigned threads = 1;
 };
 
-// Exact all-in equity: deals every possible completion of the board from the cards nobody holds
-// (excluding `dead` cards) and records who wins or ties on each one.
+// Exact all-in equity for known hands: deals every possible completion of the board from the cards
+// nobody holds (excluding `dead` cards) and records who wins or ties on each one.
 //
 // The board may have 0 (preflop), 3 (flop), 4 (turn) or 5 (river) cards. Heads-up preflop that is
 // C(48, 5) = 1,712,304 boards. Returns an error instead of a result if the input is invalid.
 std::variant<EquityResult, EquityError> exactEquity(std::span<const HoleCards> players,
                                                     CardMask board, CardMask dead = 0,
                                                     const ExactOptions& options = {});
+
+// Exact all-in equity when players hold ranges: every deal (one hand from each player's range, no
+// card used twice) combined with every completion of the board. Hands that use a board or dead
+// card are left out of their range. Every deal leaves the same number of cards to complete the
+// board from, so every (deal, board) pair is equally likely and counts once. A known hand is a
+// range with one hand, and gives exactly the same result as the HoleCards version.
+std::variant<EquityResult, EquityError> exactEquity(std::span<const Range> players, CardMask board,
+                                                    CardMask dead = 0,
+                                                    const ExactOptions& options = {});
+
+// How many showdowns exactEquity() would score for these ranges, so callers can decide between it
+// and monteCarloEquity(). Counting the deals of wide ranges can itself take a while, so counting
+// stops once it passes `limit`: the result is exact up to `limit`, and otherwise just some number
+// above it. Returns 0 if the input is invalid (exactEquity() then reports the error).
+uint64_t exactShowdowns(std::span<const Range> players, CardMask board, CardMask dead,
+                        uint64_t limit);
 
 }  // namespace poker
