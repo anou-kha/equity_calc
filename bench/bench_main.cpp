@@ -45,7 +45,28 @@ double fastestPassSeconds(int timedPasses, const Pass& pass) {
   return fastest;
 }
 
-void benchNaiveEvaluator() {
+// The fast evaluator builds its lookup tables the first time it's called. Time that one call,
+// before any other benchmark, so the build cost is visible and doesn't distort the hands/s figures.
+void benchTableBuild() {
+  const auto start = std::chrono::steady_clock::now();
+  poker::buildEvaluatorTables();
+  const double seconds =
+      std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+  std::cout << "fast evaluator tables: built in " << std::fixed << std::setprecision(1)
+            << seconds * 1000.0 << " ms on first use\n";
+}
+
+// Evaluates every hand once and returns the sum of the HandRank values. Using the results stops
+// the compiler from optimising the work away, and equal sums show the evaluators agree.
+template <typename Evaluate>
+uint64_t sumOfRanks(const std::vector<CardMask>& hands, const Evaluate& evaluate) {
+  uint64_t sum = 0;
+  for (const CardMask hand : hands) sum += evaluate(hand).value();
+  return sum;
+}
+
+// Both evaluators on the same seeded set of random 7-card hands.
+void benchEvaluators() {
   constexpr int kHands = 1'000'000;
   constexpr int kTimedPasses = 5;
   constexpr uint64_t kSeed = 42;
@@ -55,15 +76,21 @@ void benchNaiveEvaluator() {
   std::vector<CardMask> hands(kHands);
   for (CardMask& hand : hands) hand = randomHand(rng, 7);
 
-  // Summing the results stops the compiler from optimising the evaluation away.
-  uint64_t checksum = 0;
-  const double seconds = fastestPassSeconds(kTimedPasses, [&] {
-    for (CardMask hand : hands) checksum += poker::evaluateNaive(hand).value();
+  uint64_t naiveSum = 0;
+  uint64_t fastSum = 0;
+  const double naiveSeconds = fastestPassSeconds(kTimedPasses, [&] {
+    naiveSum = sumOfRanks(hands, [](CardMask hand) { return poker::evaluateNaive(hand); });
+  });
+  const double fastSeconds = fastestPassSeconds(kTimedPasses, [&] {
+    fastSum = sumOfRanks(hands, [](CardMask hand) { return poker::evaluate(hand); });
   });
 
-  std::cout << "naive evaluator, 7-card hands: " << std::fixed << std::setprecision(1)
-            << kHands / seconds / 1e6 << " M hands/s  (" << kHands << " hands, seed " << kSeed
-            << ", checksum " << checksum << ")\n";
+  std::cout << std::fixed << std::setprecision(1)
+            << "naive evaluator, 7-card hands: " << kHands / naiveSeconds / 1e6 << " M hands/s  ("
+            << kHands << " hands, seed " << kSeed << ")\n"
+            << "fast evaluator, 7-card hands:  " << kHands / fastSeconds / 1e6 << " M hands/s  ("
+            << naiveSeconds / fastSeconds << "x the naive evaluator; checksums "
+            << (naiveSum == fastSum ? "match" : "DIFFER") << ": " << fastSum << ")\n";
 }
 
 void benchExactEquityPreflop() {
@@ -109,7 +136,8 @@ int main() {
 #ifndef NDEBUG
   std::cout << "warning: this is not a Release build, so the numbers below are not meaningful\n";
 #endif
-  benchNaiveEvaluator();
+  benchTableBuild();
+  benchEvaluators();
   benchExactEquityPreflop();
   benchMonteCarloPreflop();
   return 0;
