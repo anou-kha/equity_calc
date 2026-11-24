@@ -25,6 +25,10 @@ struct Estimate {
 struct MonteCarloOptions {
   uint64_t trials = 0;  // how many random boards to deal
   uint64_t seed = 0;    // the same inputs, trials and seed always give the same result
+  // How many threads may share the work: 1 (the default) uses only the calling thread, and 0 means
+  // one per hardware thread. Trials are shared out in chunks of 65,536, so there are never more
+  // threads than chunks. The result never depends on the number of threads.
+  unsigned threads = 1;
 };
 
 struct MonteCarloResult {
@@ -43,8 +47,8 @@ struct MonteCarloResult {
 //
 // The result depends only on the inputs, the number of trials and the seed, not on how the work is
 // split up: trials run in fixed-size chunks, each with its own random stream derived from the seed,
-// and the totals are integers, so adding the chunks up in any order (or, later, on any number of
-// threads) gives bit-identical results.
+// and the totals are integers, so adding the chunks up in any order, on any number of threads,
+// gives bit-identical results.
 std::variant<MonteCarloResult, EquityError> monteCarloEquity(std::span<const HoleCards> players,
                                                              CardMask board, CardMask dead,
                                                              const MonteCarloOptions& options);

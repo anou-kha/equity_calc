@@ -63,6 +63,8 @@ add_library(poker
   src/showdown.cpp
 )
 target_include_directories(poker PUBLIC include)
+find_package(Threads REQUIRED)  # exact and Monte Carlo equity can use several std::threads
+target_link_libraries(poker PUBLIC Threads::Threads)
 target_compile_options(poker PRIVATE
   $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Wconversion -Wshadow>
   $<$<CXX_COMPILER_ID:MSVC>:/W4>
@@ -92,10 +94,10 @@ if(POKER_BUILD_TESTS)
     tests/test_evaluator.cpp
     tests/test_fast_evaluator.cpp
     tests/test_monte_carlo.cpp
+    tests/test_multithreading.cpp
     tests/test_random.cpp
   )
-  find_package(Threads REQUIRED)  # the thread-safety tests start std::threads
-  target_link_libraries(poker_tests PRIVATE poker GTest::gtest_main Threads::Threads)
+  target_link_libraries(poker_tests PRIVATE poker GTest::gtest_main)
   # Must run before gtest_discover_tests' own post-build step, which launches the executable.
   poker_copy_asan_runtime(poker_tests)
   include(GoogleTest)

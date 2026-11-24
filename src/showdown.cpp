@@ -89,4 +89,12 @@ void addToCounts(const PotShares& shares, std::span<PlayerResult> counts) {
   }
 }
 
+void addCounts(std::span<const PlayerResult> from, std::span<PlayerResult> into) {
+  for (size_t i = 0; i < into.size(); ++i) {
+    into[i].wins += from[i].wins;
+    into[i].ties += from[i].ties;
+    into[i].tieShares += from[i].tieShares;
+  }
+}
+
 }  // namespace poker::detail

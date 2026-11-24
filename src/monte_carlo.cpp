@@ -7,13 +7,22 @@
 //
 // Trade-off: for known hole cards, exact enumeration is cheap enough that Monte Carlo rarely pays
 // off; it becomes essential once players hold ranges of hands and the exact space explodes.
+//
+// Multithreading: trials run in fixed-size chunks, and threads take chunks one at a time. Each
+// chunk's random stream and starting deck depend only on its number, every thread counts into its
+// own totals, and the totals are integers, so the combined result is identical whatever the number
+// of threads or the order they finish in.
 #include "poker/monte_carlo.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
+#include <memory>
+#include <span>
 #include <utility>
 
+#include "parallel.hpp"
 #include "poker/random.hpp"
 #include "showdown.hpp"
 
@@ -21,8 +30,16 @@ namespace poker {
 namespace {
 
 // Trials run in chunks of this size. Chunk c always uses random stream c and starts from the same
-// deck order, so its results don't depend on any other chunk.
+// deck order, so its results don't depend on any other chunk. (Changing the size changes which
+// boards a given seed deals.)
 constexpr uint64_t kTrialsPerChunk = uint64_t{1} << 16;
+
+// One thread's totals, in fixed-size arrays so the hot loop never allocates.
+struct Totals {
+  std::array<PlayerResult, kMaxPlayers> players{};
+  std::array<uint64_t, kMaxPlayers> squaredPotUnits{};
+  uint64_t trials = 0;
+};
 
 // Deals `count` random cards to complete `board` by partially shuffling the deck (Fisher-Yates):
 // position i swaps with a uniformly chosen position from i onwards, so the first `count` cards are
@@ -78,26 +95,44 @@ std::variant<MonteCarloResult, EquityError> monteCarloEquity(std::span<const Hol
   const detail::Seats seats = detail::seatPlayers(players);
   const detail::Deck startingDeck = detail::remainingDeck(board | dead | seats.allHoleCards);
   const size_t missing = detail::missingBoardCards(board);
-
-  MonteCarloResult result;
-  result.counts.players.resize(players.size());
-  result.squaredPotUnits.resize(players.size());
+  const size_t numPlayers = players.size();
 
   const uint64_t numChunks =
       options.trials / kTrialsPerChunk + (options.trials % kTrialsPerChunk != 0 ? 1 : 0);
-  for (uint64_t chunk = 0; chunk < numChunks; ++chunk) {
-    const uint64_t trials = std::min(kTrialsPerChunk, options.trials - chunk * kTrialsPerChunk);
-    Rng rng(mixSeed(options.seed, chunk));
-    detail::Deck deck = startingDeck;
-    for (uint64_t trial = 0; trial < trials; ++trial) {
-      const detail::PotShares shares =
-          detail::showdown(dealRandomBoard(deck, missing, board, rng), seats.holeMasks());
-      detail::addToCounts(shares, result.counts.players);
-      for (size_t i = 0; i < players.size(); ++i) {
-        result.squaredPotUnits[i] += shares[i] * shares[i];
-      }
+  const unsigned threads = detail::threadCount(options.threads, numChunks);
+
+  const auto perThread =
+      detail::runInParallel<Totals>(numChunks, threads, [&](uint64_t chunk, Totals& totals) {
+        const uint64_t trials = std::min(kTrialsPerChunk, options.trials - chunk * kTrialsPerChunk);
+        // The generator lives on the heap, not the stack. Its state is 2.5 KB, and on the stack
+        // the hot loop's speed swung by up to 70% with small, unrelated changes to the code
+        // around it: a stall most likely caused by its state sharing the low 12 address bits with
+        // stack memory written by the calls in the loop ("4K aliasing"). On the heap it's always
+        // fast. One allocation per 65,536 trials is negligible.
+        const auto rng = std::make_unique<Rng>(mixSeed(options.seed, chunk));
+        detail::Deck deck = startingDeck;
+        const std::span<PlayerResult> counts(totals.players.data(), numPlayers);
+        for (uint64_t trial = 0; trial < trials; ++trial) {
+          const detail::PotShares shares =
+              detail::showdown(dealRandomBoard(deck, missing, board, *rng), seats.holeMasks());
+          detail::addToCounts(shares, counts);
+          for (size_t i = 0; i < numPlayers; ++i) {
+            totals.squaredPotUnits[i] += shares[i] * shares[i];
+          }
+        }
+        totals.trials += trials;
+      });
+
+  MonteCarloResult result;
+  result.counts.players.resize(numPlayers);
+  result.counts.threads = static_cast<unsigned>(perThread.size());
+  result.squaredPotUnits.resize(numPlayers);
+  for (const Totals& totals : perThread) {
+    detail::addCounts(std::span(totals.players.data(), numPlayers), result.counts.players);
+    for (size_t i = 0; i < numPlayers; ++i) {
+      result.squaredPotUnits[i] += totals.squaredPotUnits[i];
     }
-    result.counts.boards += trials;
+    result.counts.boards += totals.trials;
   }
   return result;
 }

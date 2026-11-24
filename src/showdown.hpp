@@ -54,4 +54,7 @@ PotShares showdown(CardMask board, std::span<const CardMask> holes);
 // Adds one showdown to the per-player counts: a whole pot is a win, part of a pot is a tie.
 void addToCounts(const PotShares& shares, std::span<PlayerResult> counts);
 
+// Adds one set of per-player counts into another, e.g. to combine the results of several threads.
+void addCounts(std::span<const PlayerResult> from, std::span<PlayerResult> into);
+
 }  // namespace poker::detail
