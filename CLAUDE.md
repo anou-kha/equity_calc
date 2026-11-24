@@ -45,7 +45,10 @@ compiled with `-Wall -Wextra -Wpedantic -Wconversion -Wshadow`.
   `std::variant<Result, ErrorEnum>` (see `exactEquity`).
 - Every new component gets unit tests. Equity results must be checked against known reference
   values (e.g. AA vs KK preflop ≈ 81.9% / 18.1%; AKs vs QQ ≈ 46% / 54%).
-- Monte Carlo code takes an explicit seed so tests are deterministic.
+- Monte Carlo code takes an explicit seed so tests are deterministic. For randomness use
+  `poker::Rng`, `uniformBelow` and `mixSeed` (`random.hpp`), never `std::uniform_int_distribution`
+  or `rand() % n`: the standard distributions give different numbers on different standard
+  libraries, and plain modulo is biased.
 - Add new source files to `CMakeLists.txt` explicitly (no globbing).
 - Small, focused commits with descriptive messages.
 
@@ -53,7 +56,7 @@ compiled with `-Wall -Wextra -Wpedantic -Wconversion -Wshadow`.
 1. ✅ Card representation & parsing
 2. ✅ Naive 5/7-card hand evaluator (reference implementation)
 3. ✅ Exact equity via enumeration (heads-up and multiway, with partial boards)
-4. Monte Carlo equity with seeded RNG + confidence interval reporting
+4. ✅ Monte Carlo equity with seeded RNG + confidence interval reporting
 5. Fast evaluator (lookup tables / perfect hashing) — benchmark vs naive
 6. Multithreaded Monte Carlo
 7. Range parsing (`AKs, QQ+, A5s-A2s, 22+`) and range-vs-range equity

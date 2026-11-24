@@ -7,7 +7,8 @@ How the equity calculator works, and why it is built this way. The pipeline so f
    │  parseHoleCards / parseCards          (card.hpp)
    ▼
 CardMask bitsets (one bit per card)
-   │  exactEquity: enumerate every board   (equity.hpp)
+   │  exactEquity: every possible board    (equity.hpp)
+   │  monteCarloEquity: N random boards    (monte_carlo.hpp)
    ▼
 evaluate(7 cards) -> HandRank per player   (evaluator.hpp)
    │  compare ranks, count wins / ties
@@ -230,14 +231,129 @@ constructed, so only the board size needs a runtime check.
 
 Heads-up preflop takes about 230 ms (Release, single thread): 1.7M boards × 2 evaluations. Almost all
 of that is in `evaluate()`, so the fast evaluator will speed up equity roughly in proportion.
-Multithreading (step 6) can split the combinations between threads. Monte Carlo (step 4) is for
+Multithreading (step 6) can split the combinations between threads. Monte Carlo (section 4) is for
 cases where enumeration is too slow, such as ranges.
 
 Interestingly, enumeration evaluates about 15 M hands/s, faster than the 8.8 M/s random-hand
 benchmark. The likely reason is that consecutive boards in enumeration order are similar, so the
 CPU's branch predictor guesses the evaluator's branches well, whereas random hands defeat it.
 
-## 4. Testing approach
+## 4. Monte Carlo equity
+
+`monteCarloEquity(players, board, dead, {.trials = N, .seed = S})` deals N random completions of the
+board and averages the results. It uses the same validation, deck and showdown code as `exactEquity`
+(shared through the internal `src/showdown.hpp`). The two methods therefore differ only in *which*
+boards they score, which is exactly what the tests compare.
+
+### Why the error shrinks like 1/√N
+
+Each trial gives a player a pot share `X`: 1, `1/k` for a k-way split, or 0. The estimate is the
+average of N independent samples of `X`, and its **standard error** is `σ / √N`, where `σ` is the
+spread of a single trial. So four times the trials halve the error, and 100 times the trials give one
+more correct decimal place. Heads-up, `σ` is about 0.4–0.5 (0.5 for a coin flip, less for a
+lopsided spot like AA vs KK), so 1M trials give a standard error of about 0.04–0.05% and a 95% margin
+of about ±0.08–0.1%.
+
+### Dealing a random board
+
+```cpp
+for (size_t i = 0; i < count; ++i) {
+  const auto j = i + static_cast<size_t>(uniformBelow(rng, deck.size - i));
+  std::swap(deck.cards[i], deck.cards[j]);
+  board |= deck.cards[i];
+}
+```
+
+This is a *partial* Fisher–Yates shuffle. Position `i` swaps with a uniformly chosen position from
+`i` onwards, so after `count` steps the first `count` cards are a uniformly random selection. That
+costs one random number per missing card, with no allocation. The deck array is never reset
+between trials, because shuffling an already-shuffled deck is still uniform.
+
+### Unbiased random numbers: `uniformBelow`
+
+`rng() % n` looks uniform but isn't quite. The 2⁶⁴ possible raw values form whole blocks of `n` plus
+one incomplete block, and the incomplete block gives the smallest results an extra chance.
+`uniformBelow` rejects raw values from that incomplete block and draws again. For `n = 52` a
+rejection happens about once in 10¹⁸ draws, so it costs nothing in practice, but the result is
+provably uniform. A test with `n = 3·2⁶²`, where plain modulo makes the lowest third of results
+come up half the time, shows that the bias is real and that `uniformBelow` doesn't have it.
+
+`std::uniform_int_distribution` is unbiased too, but the standard doesn't specify its algorithm, so
+MSVC and GCC produce different numbers from the same seed. Our own function keeps results identical
+on every platform.
+
+### The margin of error
+
+Per player, the code keeps two integers: the sum of pot units won (`S`) and the sum of their
+squares (`Q`). At the end:
+
+```
+mean      = S / N
+variance  = (Q / N - mean²) × N / (N - 1)      (N / (N - 1) corrects for measuring the spread
+                                                around the sample's own mean: Bessel's correction)
+std error = √(variance / N)
+95% CI    = mean ± 1.96 × std error
+```
+
+If every trial is identical (a complete board), both terms are the same exactly-representable
+number, so the margin is *exactly* 0.
+
+*Limitations:* the 1.96 comes from the normal approximation, which is accurate for many trials but
+not near 0% or 100%. A player who wins 0 of 1,000 trials gets "± 0", which overstates the certainty.
+The Wilson score interval handles that case better and would be a natural refinement. The margins
+are also per player; the players' estimates are linked, since they always add up to 100%.
+
+### Reproducible results, now and with threads
+
+The trials run in chunks of 65,536. Chunk `c` gets its own generator, seeded with
+`mixSeed(seed, c)`, and starts from a fresh copy of the deck, so no chunk depends on any other.
+
+- `mixSeed` is **SplitMix64**: it scrambles `(seed, c)` so that neighbouring chunks get unrelated
+  generator states. Seeding chunk `c` with plain `seed + c` would start the streams from very similar
+  states.
+- All the totals are **integers**, and integer addition gives the same result in any order.
+  Floating-point addition doesn't: `(a + b) + c` can differ from `a + (b + c)` in the last bits.
+
+Together, these mean the result depends only on the inputs, the trial count and the seed. When step
+6 hands chunks to several threads, the results will be bit-identical to today's single-threaded
+ones, whatever the number of threads or the order they finish in.
+
+### How it's tested
+
+Randomness and tests mix badly unless the randomness is controlled, so every test uses a fixed seed
+and is fully deterministic. The statistics then decide *how strict* each check can be:
+
+- **Agreement with exact:** on five spots, from heads-up preflop to a 9-way flop, every equity and
+  win estimate must be within 4 standard errors of the exact answer. A correct implementation
+  misses by that much only about once in 16,000 checks, so the test would pass with almost any seed.
+- **Coverage:** 400 independent runs of 1,000 trials each. Their 95% intervals must contain the exact
+  value 92–98% of the time. This tests the confidence-interval formula itself, not just one number.
+- **Known answers:** the standard-error formula on a tiny hand-computed sample; a complete board gives
+  a margin of exactly 0; dead cards are never dealt; trial counts are exact across chunk boundaries.
+- **Mutation testing:** I deliberately broke the shuffle with an off-by-one, so that one card could
+  never be dealt. Coverage fell to 79%, and 3 of the 5 agreement spots failed. AsKs vs QhQd preflop
+  came out at 42.1% instead of 46.2%, because an ace could never come. The 4-way and 9-way spots still
+  passed: the missing A♠ hurt every player there about equally. That is why the tests use several
+  different spots.
+
+### When to use which
+
+| AsAh vs KsKh preflop (Release) | Time | Answer |
+|---|---|---|
+| Exact: all 1,712,304 boards | ≈ 230 ms | 82.64%, exact |
+| Monte Carlo: 1,000,000 boards | ≈ 240 ms | 82.61% ± 0.07% |
+
+For known hole cards, exact enumeration wins: it gives the exact answer in about the same time. Each
+Monte Carlo board is also slower (about 4.2M boards/s against 7.5M). Random boards defeat the branch
+predictor just like the random-hand evaluator benchmark does, and the evaluation rate matches that
+benchmark.
+
+Monte Carlo pays off when the exact space explodes. Exact equity for AsKs against *one random hand*
+needs all C(50,2) = 1,225 opponent hands × 1,712,304 boards ≈ 2.1 billion boards, about 5 minutes at
+today's speed. Monte Carlo gets within ±0.1% in a fraction of a second. That's the situation ranges
+(step 7) create.
+
+## 5. Testing approach
 
 - **Reference values**, checked to the published two decimals:
   - AsAh vs KsKh: 82.36 / 17.09 / 0.54 tie
@@ -264,9 +380,10 @@ Tests and benchmarks use `std::mt19937_64` with a fixed seed and its *raw* outpu
 not `std::uniform_int_distribution`. The C++ standard specifies `mt19937_64` bit for bit, but leaves
 the distributions' algorithms up to each standard library, so the same seed gives different numbers
 on MSVC and GCC. With raw output, the benchmark's "1M random hands" are identical everywhere: MSVC
-and GCC builds print the same checksum. This will matter again for seeded Monte Carlo tests.
+and GCC builds print the same checksum. Monte Carlo relies on the same property: for a given seed it
+deals the same boards, and prints the same numbers, on every platform.
 
-## 5. Build and tooling notes
+## 6. Build and tooling notes
 
 - **Sanitizers:** `add_compile_options()` only affects targets created *after* it. The original
   `CMakeLists.txt` added the sanitizer flags after `add_library(poker)`, so the library itself was
@@ -277,7 +394,7 @@ and GCC builds print the same checksum. This will matter again for seeded Monte 
 - Warnings: the library builds cleanly with `/W4` (MSVC) and with
   `-Wall -Wextra -Wpedantic -Wconversion -Wshadow -Wsign-conversion` (GCC 15).
 
-## 6. Quick answers to likely interview questions
+## 7. Quick answers to likely interview questions
 
 - **Why a bitmask instead of `std::vector<Card>`?** Set operations become single instructions, there
   is no allocation, and a whole hand fits in one register.
@@ -291,7 +408,20 @@ and GCC builds print the same checksum. This will matter again for seeded Monte 
 - **Why 2520?** It's the least common multiple of 1..9, so every split pot divides into whole units
   and results stay exact.
 - **What's the complexity?** C(remaining, missing) boards × players evaluations. That is 1.7M × 2
-  heads-up preflop, and it explodes for ranges, which is why Monte Carlo comes next.
+  heads-up preflop, and it explodes for ranges, which is where Monte Carlo comes in.
+- **How accurate is the Monte Carlo answer?** Its standard error is σ/√N, and it reports a 95%
+  margin of ± 1.96 standard errors. That's about ±0.1% at 1M trials heads-up; halving the margin
+  takes four times the trials.
+- **Why not `rand() % n` or `std::uniform_int_distribution`?** Modulo is biased whenever 2⁶⁴ isn't a
+  multiple of n, and the standard distribution isn't specified precisely enough to give the same
+  numbers on every platform. Rejection sampling fixes both.
+- **How do you test something random?** Fix the seed so every run is identical, then use statistics
+  to choose the tolerance: compare with the exact answer within 4 standard errors, and check that 95%
+  intervals really cover the truth about 95% of the time. Finally, plant a bug and confirm the tests
+  catch it.
+- **How will multithreading stay reproducible?** Each fixed-size chunk of trials has its own seeded
+  random stream and fresh deck, and the totals are integers. The result is the same whichever thread
+  runs which chunk, and in whatever order.
 - **Why `std::variant` and not exceptions?** Invalid input is expected at an API boundary, the core
   library avoids exceptions, and the error enum lets callers react to the specific problem.
 - **What would you do next for speed?** A lookup-table evaluator (step 5), then multithreading

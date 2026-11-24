@@ -8,9 +8,11 @@ A fast Texas Hold'em equity calculator written in modern C++20.
 - ✅ 7-card hand evaluator (naive reference implementation, verified against all 133,784,560
   seven-card hands)
 - ✅ Exact equity by enumeration: 2–9 players, preflop/flop/turn/river, dead cards, exact split pots
+- ✅ Monte Carlo equity with 95% confidence intervals; seeded, so results are reproducible on every
+  platform
 - ✅ Command-line interface
-- Planned: optimised lookup-table evaluator, Monte Carlo equity with confidence intervals,
-  multithreading, range notation (`AKs, QQ+, A5s-A2s`) and range-vs-range equity, WebAssembly build
+- Planned: optimised lookup-table evaluator, multithreading, range notation (`AKs, QQ+, A5s-A2s`)
+  and range-vs-range equity, WebAssembly build
 
 ## Build
 
@@ -72,6 +74,27 @@ KsKh        17.09%     0.54%    17.36%
 1712304 boards enumerated in 266.8 ms
 ```
 
+**Monte Carlo:** add `--trials <n>` to deal that many random boards instead of enumerating them
+all. The answer then comes with a 95% margin of error, which shrinks like 1/√n: four times the
+trials halve it. `--seed <n>` picks the random stream (default 1), and the same command and seed
+always print the same numbers.
+
+```
+$ poker_cli AsKs QhQd --board Js Ts 2h --trials 1000000
+Board: Js Ts 2h
+
+Hand           Win       Tie    Equity    95% margin
+AsKs        56.09%     0.00%    56.09%     +/- 0.10%
+QhQd        43.91%     0.00%    43.91%     +/- 0.10%
+
+Monte Carlo: 1000000 random boards (seed 1) in 156.9 ms
+The true equity is within the margin for 95% of seeds.
+```
+
+For known hole cards like these, exact enumeration is about as fast and has no error at all, so
+Monte Carlo is mostly useful once ranges arrive (see the roadmap). See
+[docs/design.md](docs/design.md) for how both methods work.
+
 Run `poker_bench` (from a Release build) for the benchmarks below.
 
 ## Benchmarks
@@ -84,6 +107,7 @@ separate runs varied by up to about 8%. The CLI example above is a single cold r
 |-----------|-------------------:|------------------------:|
 | Naive evaluator, 1M random 7-card hands | 8.8 M hands/s | 8.6 M hands/s |
 | Exact equity, AsAh vs KsKh preflop (1,712,304 boards) | 230 ms | 216 ms |
+| Monte Carlo, same spot, 1M trials (82.61% ± 0.07%) | 240 ms | 225 ms |
 
 | Evaluator | Hands/sec | Speedup |
 |-----------|-----------|---------|
@@ -93,7 +117,7 @@ separate runs varied by up to about 8%. The CLI example above is a single cold r
 ## Project layout
 
 ```
-include/poker/   public headers: card.hpp, evaluator.hpp, equity.hpp
+include/poker/   public headers: card.hpp, evaluator.hpp, equity.hpp, monte_carlo.hpp, random.hpp
 src/             library + CLI (main.cpp)
 tests/           GoogleTest unit tests
 bench/           benchmarks
@@ -104,7 +128,7 @@ docs/            design notes (see docs/design.md)
 - [x] Card representation & parsing
 - [x] Naive hand evaluator
 - [x] Exact equity (enumeration)
-- [ ] Monte Carlo equity
+- [x] Monte Carlo equity
 - [ ] Fast evaluator + benchmarks
 - [ ] Multithreading
 - [ ] Range parsing & range-vs-range equity
