@@ -57,6 +57,7 @@ add_library(poker
   src/card.cpp
   src/equity.cpp
   src/evaluator.cpp
+  src/showdown.cpp
 )
 target_include_directories(poker PUBLIC include)
 target_compile_options(poker PRIVATE

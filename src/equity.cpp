@@ -10,56 +10,10 @@
 // The inner loop does no heap allocation: the deck and per-player data live in fixed-size arrays.
 #include "poker/equity.hpp"
 
-#include <algorithm>
-#include <array>
-#include <bit>
-#include <optional>
-
-#include "poker/evaluator.hpp"
+#include "showdown.hpp"
 
 namespace poker {
 namespace {
-
-constexpr int kBoardSize = 5;
-constexpr CardMask kFullDeck = (CardMask{1} << Card::kNumCards) - 1;
-
-bool isValidBoardSize(int size) { return size == 0 || (size >= 3 && size <= kBoardSize); }
-
-std::optional<EquityError> validate(std::span<const HoleCards> players, CardMask board,
-                                    CardMask dead) {
-  if (players.size() < kMinPlayers) return EquityError::kTooFewPlayers;
-  if (players.size() > kMaxPlayers) return EquityError::kTooManyPlayers;
-  if ((board | dead) & ~kFullDeck) return EquityError::kInvalidCard;
-  if (!isValidBoardSize(std::popcount(board))) return EquityError::kBadBoardSize;
-  if (board & dead) return EquityError::kDuplicateCard;
-
-  CardMask used = board | dead;
-  for (const HoleCards& hole : players) {
-    for (const Card card : hole) {
-      if (card.index() >= Card::kNumCards) return EquityError::kInvalidCard;
-      if (used & card.mask()) return EquityError::kDuplicateCard;
-      used |= card.mask();
-    }
-  }
-  const int cardsLeft = std::popcount(kFullDeck & ~used);
-  if (cardsLeft < kBoardSize - std::popcount(board)) return EquityError::kNotEnoughCards;
-  return std::nullopt;
-}
-
-// The cards that can still be dealt, each as a single-bit mask, in a fixed-size array.
-struct Deck {
-  std::array<CardMask, Card::kNumCards> cards{};
-  size_t size = 0;
-};
-
-Deck remainingDeck(CardMask used) {
-  Deck deck;
-  for (int index = 0; index < Card::kNumCards; ++index) {
-    const CardMask card = CardMask{1} << index;
-    if (!(used & card)) deck.cards[deck.size++] = card;
-  }
-  return deck;
-}
 
 // Calls visit(dealt | chosen) for every way of choosing `count` cards from deck.cards[first..],
 // each combination exactly once. Choosing card i and then only cards after it is what stops the
@@ -68,7 +22,7 @@ Deck remainingDeck(CardMask used) {
 // `visit` is a template parameter rather than a std::function, so the compiler can inline it and
 // there is no heap allocation or indirect call per board.
 template <typename Visit>
-void forEachCombination(const Deck& deck, size_t count, size_t first, CardMask dealt,
+void forEachCombination(const detail::Deck& deck, size_t count, size_t first, CardMask dealt,
                         const Visit& visit) {
   if (count == 0) {
     visit(dealt);
@@ -76,30 +30,6 @@ void forEachCombination(const Deck& deck, size_t count, size_t first, CardMask d
   }
   for (size_t i = first; i + count <= deck.size; ++i) {
     forEachCombination(deck, count - 1, i + 1, dealt | deck.cards[i], visit);
-  }
-}
-
-// Scores one complete board: the single best hand wins; if several players share the best hand,
-// each of them gets an equal share of the pot.
-void scoreBoard(CardMask board, std::span<const CardMask> holes, std::span<PlayerResult> results) {
-  std::array<HandRank, kMaxPlayers> ranks;
-  HandRank best;
-  for (size_t i = 0; i < holes.size(); ++i) {
-    ranks[i] = evaluate(board | holes[i]);
-    best = std::max(best, ranks[i]);
-  }
-  uint64_t numBest = 0;
-  for (size_t i = 0; i < holes.size(); ++i) {
-    if (ranks[i] == best) ++numBest;
-  }
-  for (size_t i = 0; i < holes.size(); ++i) {
-    if (ranks[i] != best) continue;
-    if (numBest == 1) {
-      ++results[i].wins;
-    } else {
-      ++results[i].ties;
-      results[i].tieShares += kPotUnits / numBest;
-    }
   }
 }
 
@@ -138,21 +68,15 @@ std::string_view toString(EquityError error) {
 
 std::variant<EquityResult, EquityError> exactEquity(std::span<const HoleCards> players,
                                                     CardMask board, CardMask dead) {
-  if (const auto error = validate(players, board, dead)) return *error;
+  if (const auto error = detail::validateDeal(players, board, dead)) return *error;
 
-  std::array<CardMask, kMaxPlayers> holeMasks{};
-  CardMask used = board | dead;
-  for (size_t i = 0; i < players.size(); ++i) {
-    holeMasks[i] = players[i][0].mask() | players[i][1].mask();
-    used |= holeMasks[i];
-  }
-  const std::span<const CardMask> holes(holeMasks.data(), players.size());
+  const detail::Seats seats = detail::seatPlayers(players);
+  const detail::Deck deck = detail::remainingDeck(board | dead | seats.allHoleCards);
 
   EquityResult result;
   result.players.resize(players.size());
-  const auto missing = static_cast<size_t>(kBoardSize - std::popcount(board));
-  forEachCombination(remainingDeck(used), missing, 0, board, [&](CardMask fullBoard) {
-    scoreBoard(fullBoard, holes, result.players);
+  forEachCombination(deck, detail::missingBoardCards(board), 0, board, [&](CardMask fullBoard) {
+    detail::addToCounts(detail::showdown(fullBoard, seats.holeMasks()), result.players);
     ++result.boards;
   });
   return result;
