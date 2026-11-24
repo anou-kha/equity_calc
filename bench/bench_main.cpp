@@ -17,6 +17,7 @@
 #include "poker/equity.hpp"
 #include "poker/evaluator.hpp"
 #include "poker/monte_carlo.hpp"
+#include "poker/range.hpp"
 
 namespace {
 
@@ -186,6 +187,42 @@ void benchThreadScaling() {
   }
 }
 
+poker::Range rangeOf(std::string_view text) {
+  return std::get<poker::Range>(poker::parseRange(text));
+}
+
+// Range against range, on all hardware threads: an exact spot (AA vs KK: 36 deals of the hands x
+// 1,712,304 boards) and a Monte Carlo spot too big to enumerate (QQ+, AKs against any two cards).
+void benchRanges() {
+  constexpr int kTimedPasses = 2;
+  constexpr uint64_t kTrials = 10'000'000;
+
+  const std::vector<poker::Range> aaKk = {rangeOf("AA"), rangeOf("KK")};
+  poker::EquityResult exact;
+  const double exactSeconds = fastestPassSeconds(kTimedPasses, [&] {
+    exact = std::get<poker::EquityResult>(poker::exactEquity(aaKk, 0, 0, {.threads = 0}));
+  });
+  std::cout << std::fixed << std::setprecision(1)
+            << "ranges, exact AA vs KK: " << exactSeconds * 1000.0 << " ms  (" << exact.boards
+            << " showdowns, " << static_cast<double>(exact.boards) / exactSeconds / 1e6
+            << " M/s on " << exact.threads << " threads, AA equity " << std::setprecision(2)
+            << 100.0 * exact.equity(0) << "%)\n";
+
+  const std::vector<poker::Range> wide = {rangeOf("QQ+, AKs"), rangeOf("random")};
+  poker::Estimate equity;
+  unsigned threads = 0;
+  const double monteCarloSeconds = fastestPassSeconds(kTimedPasses, [&] {
+    const auto result = std::get<poker::MonteCarloResult>(
+        poker::monteCarloEquity(wide, 0, 0, {.trials = kTrials, .seed = 1, .threads = 0}));
+    equity = result.equity(0);
+    threads = result.counts.threads;
+  });
+  std::cout << std::fixed << std::setprecision(1)
+            << "ranges, monte carlo QQ+,AKs vs random: " << monteCarloSeconds * 1000.0 << " ms  ("
+            << kTrials << " trials on " << threads << " threads, equity " << std::setprecision(2)
+            << 100.0 * equity.value << "% +/- " << 100.0 * equity.margin95() << "%)\n";
+}
+
 }  // namespace
 
 int main() {
@@ -197,5 +234,6 @@ int main() {
   benchExactEquityPreflop();
   benchMonteCarloPreflop();
   benchThreadScaling();
+  benchRanges();
   return 0;
 }
