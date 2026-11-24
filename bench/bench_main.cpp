@@ -9,6 +9,7 @@
 #include <iomanip>
 #include <iostream>
 #include <random>
+#include <thread>
 #include <variant>
 #include <vector>
 
@@ -130,6 +131,61 @@ void benchMonteCarloPreflop() {
             << "%)\n";
 }
 
+bool sameCounts(const poker::EquityResult& a, const poker::EquityResult& b) {
+  if (a.boards != b.boards || a.players.size() != b.players.size()) return false;
+  for (size_t i = 0; i < a.players.size(); ++i) {
+    if (a.players[i].wins != b.players[i].wins || a.players[i].ties != b.players[i].ties ||
+        a.players[i].tieShares != b.players[i].tieShares) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// How exact enumeration and Monte Carlo speed up with more threads, and a check that every thread
+// count gives exactly the same answer as one thread.
+void benchThreadScaling() {
+  constexpr int kTimedPasses = 2;
+  constexpr uint64_t kTrials = 10'000'000;
+  const std::vector<poker::HoleCards> players = {*poker::parseHoleCards("AsAh"),
+                                                 *poker::parseHoleCards("KsKh")};
+
+  std::cout << "thread scaling, AsAh vs KsKh preflop (" << std::thread::hardware_concurrency()
+            << " hardware threads):\n"
+            << "  threads   exact, 1,712,304 boards   monte carlo, 10M trials   same results\n";
+  double exactBaseline = 0;
+  double monteCarloBaseline = 0;
+  poker::EquityResult exactReference;
+  poker::EquityResult monteCarloReference;
+  for (const unsigned threads : {1u, 2u, 4u, 8u, 16u}) {
+    poker::EquityResult exact;
+    poker::EquityResult monteCarlo;
+    const double exactSeconds = fastestPassSeconds(kTimedPasses, [&] {
+      exact =
+          std::get<poker::EquityResult>(poker::exactEquity(players, 0, 0, {.threads = threads}));
+    });
+    const double monteCarloSeconds = fastestPassSeconds(kTimedPasses, [&] {
+      monteCarlo = std::get<poker::MonteCarloResult>(
+                       poker::monteCarloEquity(players, 0, 0,
+                                               {.trials = kTrials, .seed = 1, .threads = threads}))
+                       .counts;
+    });
+    if (threads == 1) {
+      exactBaseline = exactSeconds;
+      monteCarloBaseline = monteCarloSeconds;
+      exactReference = exact;
+      monteCarloReference = monteCarlo;
+    }
+    const bool same =
+        sameCounts(exact, exactReference) && sameCounts(monteCarlo, monteCarloReference);
+    std::cout << std::fixed << std::setprecision(1) << std::setw(9) << exact.threads
+              << std::setw(12) << exactSeconds * 1000.0 << " ms " << std::setw(5)
+              << exactBaseline / exactSeconds << "x" << std::setw(16) << monteCarloSeconds * 1000.0
+              << " ms " << std::setw(5) << monteCarloBaseline / monteCarloSeconds << "x"
+              << std::setw(15) << (same ? "yes" : "NO") << '\n';
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -140,5 +196,6 @@ int main() {
   benchEvaluators();
   benchExactEquityPreflop();
   benchMonteCarloPreflop();
+  benchThreadScaling();
   return 0;
 }
