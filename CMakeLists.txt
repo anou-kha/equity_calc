@@ -90,10 +90,12 @@ if(POKER_BUILD_TESTS)
     tests/test_card.cpp
     tests/test_equity.cpp
     tests/test_evaluator.cpp
+    tests/test_fast_evaluator.cpp
     tests/test_monte_carlo.cpp
     tests/test_random.cpp
   )
-  target_link_libraries(poker_tests PRIVATE poker GTest::gtest_main)
+  find_package(Threads REQUIRED)  # the thread-safety tests start std::threads
+  target_link_libraries(poker_tests PRIVATE poker GTest::gtest_main Threads::Threads)
   # Must run before gtest_discover_tests' own post-build step, which launches the executable.
   poker_copy_asan_runtime(poker_tests)
   include(GoogleTest)

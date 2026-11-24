@@ -29,6 +29,18 @@ inline CardMask cards(std::string_view text) {
   return toMask(*parsed);
 }
 
+// Calls visit(hand) for every `size`-card subset of the deck, each exactly once.
+template <typename Visit>
+void forEachHand(int size, const Visit& visit, int firstCard = 0, CardMask hand = 0) {
+  if (size == 0) {
+    visit(hand);
+    return;
+  }
+  for (int card = firstCard; card <= Card::kNumCards - size; ++card) {
+    forEachHand(size - 1, visit, card + 1, hand | (CardMask{1} << card));
+  }
+}
+
 // Parses one player's hole cards like "AsKs"; throws (failing the test) on malformed input.
 inline HoleCards hole(std::string_view text) {
   const auto parsed = parseHoleCards(text);
