@@ -5,10 +5,13 @@
 //   poker_cli AsKs QhQd 7c7d --dead 9c           three players, with a dead card
 //   poker_cli AsKs QhQd --trials 1000000         Monte Carlo with 1,000,000 random boards
 //   poker_cli AsKs QhQd --trials 1000000 --seed 7
+//   poker_cli AsKs QhQd --threads 1              single-threaded
 //
 // --board and --dead take every following argument up to the next option, so "Js Ts 2h" and
 // "JsTs2h" both work. Without --trials the answer is exact. Monte Carlo answers come with a 95%
 // margin of error and are reproducible: the same command and seed always print the same numbers.
+// The work is shared between all hardware threads unless --threads says otherwise; the number of
+// threads never changes the answer, only the time.
 #include <charconv>
 #include <chrono>
 #include <cstddef>
@@ -33,6 +36,7 @@ namespace {
 using Clock = std::chrono::steady_clock;
 
 constexpr uint64_t kDefaultSeed = 1;
+constexpr uint64_t kMaxThreads = 256;  // the library never uses more than this
 
 struct Options {
   std::vector<poker::HoleCards> players;
@@ -40,11 +44,12 @@ struct Options {
   std::vector<poker::Card> dead;
   std::optional<uint64_t> trials;  // set: Monte Carlo; unset: exact enumeration
   std::optional<uint64_t> seed;
+  unsigned threads = 0;  // 0: one per hardware thread
 };
 
 constexpr std::string_view kUsage =
     "usage: poker_cli <hand> <hand> [<hand> ...] [--board <cards>] [--dead <cards>]\n"
-    "                 [--trials <n> [--seed <n>]]\n"
+    "                 [--trials <n> [--seed <n>]] [--threads <n>]\n"
     "  e.g. poker_cli AsKs QhQd --board Js Ts 2h\n"
     "       poker_cli AsKs QhQd --trials 1000000\n";
 
@@ -76,14 +81,24 @@ std::optional<Options> parseOptions(int argc, char** argv) {
         return std::nullopt;
       }
       (arg == "--board" ? options.board : options.dead) = *cards;
-    } else if (arg == "--trials" || arg == "--seed") {
+    } else if (arg == "--trials" || arg == "--seed" || arg == "--threads") {
       std::optional<uint64_t> value;
       if (i + 1 < argc) value = parseNumber(argv[++i]);
       if (!value) {
-        std::cerr << arg << " needs a whole number, e.g. " << arg << " 1000000\n";
+        std::cerr << arg << " needs a whole number, e.g. " << arg << ' '
+                  << (arg == "--threads" ? "8" : "1000000") << '\n';
         return std::nullopt;
       }
-      (arg == "--trials" ? options.trials : options.seed) = *value;
+      if (arg == "--trials") {
+        options.trials = *value;
+      } else if (arg == "--seed") {
+        options.seed = *value;
+      } else if (*value > kMaxThreads) {
+        std::cerr << "--threads must be at most " << kMaxThreads << " (0 means all of them)\n";
+        return std::nullopt;
+      } else {
+        options.threads = static_cast<unsigned>(*value);
+      }
     } else if (isOption(arg)) {
       std::cerr << "unknown option: " << arg << '\n' << kUsage;
       return std::nullopt;
@@ -157,22 +172,30 @@ void printTable(const Options& options, const poker::EquityResult& result,
   std::cout << '\n';
 }
 
+// " on 1 thread" / " on 16 threads"
+std::string onThreads(unsigned threads) {
+  return " on " + std::to_string(threads) + (threads == 1 ? " thread" : " threads");
+}
+
 int runExact(const Options& options) {
   const auto start = Clock::now();
-  const auto outcome = poker::exactEquity(options.players, poker::toMask(options.board),
-                                          poker::toMask(options.dead));
+  const auto outcome =
+      poker::exactEquity(options.players, poker::toMask(options.board), poker::toMask(options.dead),
+                         {.threads = options.threads});
   const double seconds = secondsSince(start);
   if (printIfError(outcome)) return 1;
 
   const auto& result = std::get<poker::EquityResult>(outcome);
   printTable(options, result, {});
-  std::cout << result.boards << " boards enumerated in " << milliseconds(seconds) << '\n';
+  std::cout << result.boards << " boards enumerated in " << milliseconds(seconds)
+            << onThreads(result.threads) << '\n';
   return 0;
 }
 
 int runMonteCarlo(const Options& options) {
   const poker::MonteCarloOptions monteCarlo = {.trials = *options.trials,
-                                               .seed = options.seed.value_or(kDefaultSeed)};
+                                               .seed = options.seed.value_or(kDefaultSeed),
+                                               .threads = options.threads};
   const auto start = Clock::now();
   const auto outcome = poker::monteCarloEquity(options.players, poker::toMask(options.board),
                                                poker::toMask(options.dead), monteCarlo);
@@ -186,7 +209,7 @@ int runMonteCarlo(const Options& options) {
   }
   printTable(options, result.counts, margins);
   std::cout << "Monte Carlo: " << monteCarlo.trials << " random boards (seed " << monteCarlo.seed
-            << ") in " << milliseconds(seconds) << '\n'
+            << ") in " << milliseconds(seconds) << onThreads(result.counts.threads) << '\n'
             << "The true equity is within the margin for 95% of seeds.\n";
   return 0;
 }

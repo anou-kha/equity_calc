@@ -53,6 +53,11 @@ compiled with `-Wall -Wextra -Wpedantic -Wconversion -Wshadow`.
   what `evaluateNaive()` (the reference, `evaluator.cpp`) returns; the tests compare them on every
   hand. The fast evaluator's tables are built *from* `evaluateNaive()`, so treat changes to the
   reference with great care, and use `evaluate()` everywhere else.
+- Multithreading: use `detail::runInParallel` (`src/parallel.hpp`). Results must be bit-identical
+  for every thread count: split work into tasks that depend only on their number (e.g. Monte Carlo
+  chunk c always uses `mixSeed(seed, c)`), keep integer totals per thread, and combine them at
+  the end. The library defaults to 1 thread; only the CLI uses all cores by default. Keep large
+  objects (like `std::mt19937_64`'s 2.5 KB state) off the stack in hot loops, see design.md.
 - Add new source files to `CMakeLists.txt` explicitly (no globbing).
 - Small, focused commits with descriptive messages.
 
@@ -62,6 +67,6 @@ compiled with `-Wall -Wextra -Wpedantic -Wconversion -Wshadow`.
 3. ✅ Exact equity via enumeration (heads-up and multiway, with partial boards)
 4. ✅ Monte Carlo equity with seeded RNG + confidence interval reporting
 5. ✅ Fast evaluator (lookup tables / perfect hashing) — benchmark vs naive
-6. Multithreaded Monte Carlo
+6. ✅ Multithreaded Monte Carlo (and exact enumeration)
 7. Range parsing (`AKs, QQ+, A5s-A2s, 22+`) and range-vs-range equity
 8. CLI polish, then WebAssembly build + web frontend

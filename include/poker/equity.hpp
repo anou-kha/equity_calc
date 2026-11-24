@@ -28,6 +28,7 @@ struct PlayerResult {
 struct EquityResult {
   std::vector<PlayerResult> players;  // in the order the players were given
   uint64_t boards = 0;                // number of board completions enumerated
+  unsigned threads = 1;               // how many threads did the work
 
   // Fractions of all boards, in [0, 1].
   double win(size_t player) const;
@@ -48,12 +49,20 @@ enum class EquityError {
 
 std::string_view toString(EquityError error);
 
+struct ExactOptions {
+  // How many threads may share the work: 1 (the default) uses only the calling thread, and 0 means
+  // one per hardware thread. Small jobs use fewer threads, because starting a thread costs more
+  // than enumerating a few thousand boards. The result never depends on the number of threads.
+  unsigned threads = 1;
+};
+
 // Exact all-in equity: deals every possible completion of the board from the cards nobody holds
 // (excluding `dead` cards) and records who wins or ties on each one.
 //
 // The board may have 0 (preflop), 3 (flop), 4 (turn) or 5 (river) cards. Heads-up preflop that is
 // C(48, 5) = 1,712,304 boards. Returns an error instead of a result if the input is invalid.
 std::variant<EquityResult, EquityError> exactEquity(std::span<const HoleCards> players,
-                                                    CardMask board, CardMask dead = 0);
+                                                    CardMask board, CardMask dead = 0,
+                                                    const ExactOptions& options = {});
 
 }  // namespace poker

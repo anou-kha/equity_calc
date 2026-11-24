@@ -13,6 +13,8 @@ endif()
 option(POKER_BUILD_TESTS "Build unit tests" ON)
 option(POKER_BUILD_BENCH "Build benchmarks" ON)
 option(POKER_SANITIZE "Enable address/undefined sanitizers" OFF)
+option(POKER_TSAN "Enable ThreadSanitizer (GCC/Clang only; can't be combined with POKER_SANITIZE)"
+  OFF)
 
 # ---- Sanitizers ------------------------------------------------------------
 # This must come before any target is created: add_compile_options() only applies to targets
@@ -43,6 +45,20 @@ if(POKER_SANITIZE)
   endif()
 endif()
 
+# ThreadSanitizer detects data races: two threads touching the same memory without
+# synchronisation, at least one of them writing. It needs its own build because it can't be
+# combined with AddressSanitizer, and MSVC doesn't provide it.
+if(POKER_TSAN)
+  if(MSVC)
+    message(FATAL_ERROR "POKER_TSAN: ThreadSanitizer isn't available with MSVC; use GCC or Clang")
+  endif()
+  if(POKER_SANITIZE)
+    message(FATAL_ERROR "POKER_TSAN can't be combined with POKER_SANITIZE (ASan and TSan conflict)")
+  endif()
+  add_compile_options(-fsanitize=thread -fno-omit-frame-pointer)
+  add_link_options(-fsanitize=thread)
+endif()
+
 function(poker_copy_asan_runtime target)
   foreach(dll IN LISTS POKER_ASAN_DLLS)
     if(EXISTS "${dll}")
@@ -63,6 +79,8 @@ add_library(poker
   src/showdown.cpp
 )
 target_include_directories(poker PUBLIC include)
+find_package(Threads REQUIRED)  # exact and Monte Carlo equity can use several std::threads
+target_link_libraries(poker PUBLIC Threads::Threads)
 target_compile_options(poker PRIVATE
   $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Wconversion -Wshadow>
   $<$<CXX_COMPILER_ID:MSVC>:/W4>
@@ -92,10 +110,10 @@ if(POKER_BUILD_TESTS)
     tests/test_evaluator.cpp
     tests/test_fast_evaluator.cpp
     tests/test_monte_carlo.cpp
+    tests/test_multithreading.cpp
     tests/test_random.cpp
   )
-  find_package(Threads REQUIRED)  # the thread-safety tests start std::threads
-  target_link_libraries(poker_tests PRIVATE poker GTest::gtest_main Threads::Threads)
+  target_link_libraries(poker_tests PRIVATE poker GTest::gtest_main)
   # Must run before gtest_discover_tests' own post-build step, which launches the executable.
   poker_copy_asan_runtime(poker_tests)
   include(GoogleTest)

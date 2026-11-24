@@ -28,6 +28,32 @@ jobs:
       - name: Test
         run: ctest --test-dir build --output-on-failure
 
+  # ThreadSanitizer finds data races in the multithreaded code. It needs a build of its own
+  # (it can't be combined with AddressSanitizer) and isn't available with MSVC.
+  thread-sanitizer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Recent Ubuntu kernels randomise memory addresses with more bits than ThreadSanitizer's
+      # memory layout expects, which can make instrumented programs abort at startup ("unexpected
+      # memory mapping"). Reducing the randomisation is the usual workaround.
+      - name: Make the memory layout ThreadSanitizer-compatible
+        run: sudo sysctl vm.mmap_rnd_bits=28
+
+      # RelWithDebInfo: optimised, so the slow instrumented tests finish sooner, but with debug
+      # information, so race reports show file names and line numbers.
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DPOKER_TSAN=ON
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+        env:
+          TSAN_OPTIONS: halt_on_error=1  # fail at the first race report
+
   format:
     runs-on: ubuntu-latest
     steps:
