@@ -10,7 +10,7 @@ CardMask bitsets (one bit per card)
    │  exactEquity: every possible board    (equity.hpp)
    │  monteCarloEquity: N random boards    (monte_carlo.hpp)
    ▼
-evaluate(7 cards) -> HandRank per player   (evaluator.hpp)
+evaluate(7 cards) -> HandRank per player   (evaluator.hpp, lookup tables)
    │  compare ranks, count wins / ties
    ▼
 win %, tie %, equity % per player
@@ -46,9 +46,9 @@ naive evaluator is happier with rank-major, and either works.
 
 ## 2. The naive hand evaluator
 
-`HandRank evaluate(CardMask cards)` takes 5, 6 or 7 cards and returns the strength of the best
-five-card hand. It is deliberately simple: it is the **reference implementation** that the fast
-evaluator (roadmap step 5) will be tested against.
+`HandRank evaluateNaive(CardMask cards)` takes 5, 6 or 7 cards and returns the strength of the best
+five-card hand. It is deliberately simple: it is the **reference implementation**. The fast
+evaluator (section 3) is built from it and tested against it.
 
 ### Step 1: summarise the cards as rank sets
 
@@ -135,22 +135,150 @@ them.
   and exactly 7,462 distinct ranks.
 - **Exhaustive 7-card test** (opt-in, ~10 s in Release): all 133,784,560 hands match the known
   frequencies and exactly 4,824 distinct ranks.
-- **Second method:** for 100,000 random 7-card hands, `evaluate(7 cards)` equals the best of the
+- **Second method:** for 100,000 random 7-card hands, `evaluateNaive(7 cards)` equals the best of the
   C(7,2) = 21 five-card subsets. The 5-card logic is already proven exhaustively, so this checks the
   7-card logic (choosing the best five and the right kickers) with an independent method.
 - **Hand-picked edge cases:** wheel, steel wheel, royal flush, 6–7 suited cards, three pairs, two sets
   of trips, quads with the best kicker, ordering within categories, and boards that play (exact ties).
 
 Note that standard tables list royal flushes (4 five-card hands) separately from other straight
-flushes (36). `evaluate()` puts royals in the straight flush category, so that category has 40.
+flushes (36). The evaluators put royals in the straight flush category, so that category has 40.
 
 ### Performance
 
-About 8.8 M seven-card hands per second (single thread, Release). Each call loops over 13 ranks and
-4 suits and runs several branchy category checks. Lookup-table evaluators (roadmap step 5) replace
-most of that with a few table reads, and will be checked against this one.
+About 9 M seven-card hands per second (single thread, Release). Each call loops over 13 ranks and 4
+suits and runs several branchy category checks. The fast evaluator (section 3) replaces almost all
+of that with a few table lookups.
 
-## 3. Exact equity by enumeration
+## 3. The fast evaluator
+
+`HandRank evaluate(CardMask cards)` returns exactly the same values as `evaluateNaive()`, about 9×
+faster: 80–90 M hands/s. Exact equity and Monte Carlo both use it.
+
+### The idea: answer every question in advance
+
+Instead of working out each hand from scratch, the fast evaluator computes the answer for every
+possible situation once, stores it in a table, and then only has to work out *which* table entry a
+hand belongs to. Two facts keep the tables small:
+
+1. **Flushes depend only on the flush suit's ranks.** With 5–7 cards, a flush can't coexist with a
+   full house or quads (section 2). So if a suit holds 5 or more cards, the answer depends only on
+   which ranks that suit holds: a 13-bit rank set indexes a **flush table** of 2¹³ = 8,192 entries.
+2. **Otherwise suits don't matter at all,** only how many cards of each rank there are: 13 numbers
+   from 0 to 4 that add up to the number of cards. For 7 cards there are only 49,205 such count
+   vectors.
+
+### Counting the cards of each rank in two lines
+
+The card encoding puts each rank's four cards in four adjacent bits (one nibble), so a rank's count
+is the popcount of its nibble. The first two steps of the classic bit-counting trick do that for all
+13 nibbles at once:
+
+```cpp
+const uint64_t pairCounts = cards - ((cards >> 1) & 0x5555555555555555);  // per 2 bits
+return (pairCounts & 0x3333333333333333) + ((pairCounts >> 2) & 0x3333333333333333);  // per 4 bits
+```
+
+### The perfect hash: numbering the count vectors
+
+A table needs an index, so each count vector needs a number. The trick is to imagine all the vectors
+with the same total listed in order (lexicographically, rank 0's count first) and use a vector's
+**position in that list**. With only 3 ranks and 2 cards, for example:
+
+| Position | 0 | 1 | 2 | 3 | 4 | 5 |
+|---|---|---|---|---|---|---|
+| Counts (rank 0, 1, 2) | 0 0 2 | 0 1 1 | 0 2 0 | 1 0 1 | 1 1 0 | 2 0 0 |
+
+To find the position of `1 1 0` without writing the list out, count the vectors that come before
+it, rank by rank:
+
+- Vectors with **fewer than 1** card on rank 0 come first. That's every way to put both cards on
+  ranks 1–2: **3** vectors.
+- Then, among vectors with exactly 1 card on rank 0, those with **fewer than 1** card on rank 1: the
+  remaining card must go on rank 2, so **1** vector.
+- Rank 2 has 0 cards, so nothing comes before it there. The position is 3 + 1 = **4**.
+
+Each step only needs "how many ways can the remaining ranks hold the remaining cards?", which
+depends on just three small numbers (the rank, the cards left, and this rank's count). So it is
+precomputed into a 13 × 8 × 5 table of offsets, and hashing a hand is **one table lookup and one
+addition per rank**.
+
+The hash is **perfect** (no two vectors share a number) and **minimal** (no gaps), so the tables
+have exactly one entry per possibility: 6,175 for 5 cards, 18,395 for 6 and 49,205 for 7. Those are
+the counts of ways to choose k ranks with repetition, C(12 + k, k), minus those with 5 or more of
+one rank, and a test checks the table sizes match them.
+
+### Building the tables from the reference
+
+Every table entry is filled in by asking `evaluateNaive()` about one representative hand:
+
+- **Flush table:** for each set of 5–7 ranks, an all-clubs hand with those ranks.
+- **Count tables:** for each count vector, a hand with exactly those counts, with suits dealt
+  round-robin (clubs, diamonds, hearts, spades, clubs, ...). No suit then gets more than 2 of 7
+  cards, so there's never a flush, and the cards of one rank always get different suits.
+
+That's 78,494 naive evaluations (4,719 flush rank sets plus 73,775 count vectors), roughly 6 ms,
+done once. The tables take about 330 KB, small
+enough to stay in the CPU's L2 cache. Because they're built from the reference, the fast evaluator
+gives the same answers by construction; the tests then confirm it on every hand.
+
+The tables live in a function-local `static`, which C++ guarantees to initialise exactly once even if
+several threads call `evaluate()` for the first time simultaneously ("magic statics"). That matters
+for multithreading (step 6). `buildEvaluatorTables()` builds them up front, so timings (and later a
+user interface) don't include the one-off cost.
+
+`evaluate()` itself is then short:
+
+```cpp
+for (size_t suit = 0; suit < kNumSuits; ++suit) {
+  const size_t count = suitCount(cards, suit);
+  if (count >= 5) return t.flush[suitRanks(cards, suit)];  // about 3% of 7-card hands
+  numCards += count;
+}
+return t.nonFlush[numCards][nonFlushIndex(t.offsets, cards, numCards)];
+```
+
+### Two measured optimisations
+
+The first working version ran at about 48 M hands/s (MSVC), only 5× the naive evaluator. Measuring
+found two problems:
+
+1. **An early exit made the loop slower.** The hash loop originally stopped as soon as every card was
+   counted. That sounds cheaper, but it stops at a different rank for every hand, so the CPU's branch
+   predictor kept guessing wrong, and each wrong guess costs about 15–20 cycles. Always running all
+   13 steps (the extra ones add 0) took MSVC from **48 to 79 M hands/s**, and a fixed-length loop can
+   also be fully unrolled by the compiler.
+2. **`std::popcount` was a function call on GCC.** Without CPU-specific build flags (`-mpopcnt`), GCC
+   can't assume the CPU has a popcount instruction, so it calls a slower library routine. The suit
+   counts now use a multiplication instead: a suit's cards, shifted down, are one bit per rank at
+   bits 0, 4, 8, …, 48, and multiplying by `0x1111…1` adds every nibble into the ones above it, so the
+   top nibble ends up holding the total (at most 13, so it never overflows). GCC went from **57 to
+   93 M hands/s**; MSVC, which checks for the instruction at runtime, stayed about the same.
+
+The lesson worth telling in an interview: measure, because the "obvious" optimisation can make code
+slower, and compiler flags matter as much as the algorithm.
+
+### How it's tested
+
+- **Every behaviour test runs on both evaluators** (they are parameterised): categories, edge cases,
+  ordering, ties, and the exhaustive 5-card frequencies.
+- **Fast == naive on every hand:** all 2,598,960 five-card hands and 500,000 random 6/7-card hands on
+  every test run, plus all 20,358,520 six-card and 133,784,560 seven-card hands as an opt-in test
+  (about 11 s in Release). So the two are equal by exhaustive check, not by sampling.
+- **The tables are minimal:** their sizes must be exactly 6,175 / 18,395 / 49,205.
+- **Thread safety:** 8 threads race to make the first call, and every answer must still be right.
+
+### Alternatives considered
+
+- **The "Two Plus Two" evaluator:** a state machine where each card is one table lookup. It's even
+  faster, but the table is about 130 MB, slow to build, and too big for a WebAssembly build.
+- **Cactus Kev's 5-card evaluator:** small tables, but a 7-card hand needs all 21 five-card subsets,
+  so it's barely faster than the naive evaluator.
+
+Ideas for later, each needing a measurement first: hashing two ranks per lookup (half as many
+steps), and in exact enumeration, reusing the board's rank counts across all the players' hands.
+
+## 4. Exact equity by enumeration
 
 `exactEquity(players, board, dead)` deals **every** possible completion of the board and scores each
 showdown. Every completion is equally likely, so the counts are exact probabilities, with no
@@ -229,16 +357,19 @@ constructed, so only the board size needs a runtime check.
 
 ### Performance
 
-Heads-up preflop takes about 230 ms (Release, single thread): 1.7M boards × 2 evaluations. Almost all
-of that is in `evaluate()`, so the fast evaluator will speed up equity roughly in proportion.
-Multithreading (step 6) can split the combinations between threads. Monte Carlo (section 4) is for
-cases where enumeration is too slow, such as ranges.
+Heads-up preflop takes about 70 ms with MSVC and 50 ms with GCC (Release, single thread): 1.7M
+boards × 2 evaluations. With the naive evaluator it took about 230 ms. That 3–4× gain is smaller
+than the evaluator's 8–10×, because the evaluator is no longer nearly all of the work: enumerating
+boards and comparing ranks now take a visible share. Multithreading (step 6) can split the
+combinations between threads. Monte Carlo (section 5) is for cases where enumeration is too slow,
+such as ranges.
 
-Interestingly, enumeration evaluates about 15 M hands/s, faster than the 8.8 M/s random-hand
-benchmark. The likely reason is that consecutive boards in enumeration order are similar, so the
-CPU's branch predictor guesses the evaluator's branches well, whereas random hands defeat it.
+Interestingly, with the naive evaluator, enumeration evaluated about 15 M hands/s, faster than the
+8.8 M/s random-hand benchmark. The likely reason is that consecutive boards in enumeration order are
+similar, so the CPU's branch predictor guessed the evaluator's branches well, whereas random hands
+defeat it.
 
-## 4. Monte Carlo equity
+## 5. Monte Carlo equity
 
 `monteCarloEquity(players, board, dead, {.trials = N, .seed = S})` deals N random completions of the
 board and averages the results. It uses the same validation, deck and showdown code as `exactEquity`
@@ -338,22 +469,28 @@ and is fully deterministic. The statistics then decide *how strict* each check c
 
 ### When to use which
 
-| AsAh vs KsKh preflop (Release) | Time | Answer |
+| AsAh vs KsKh preflop (Release, MSVC) | Time | Answer |
 |---|---|---|
-| Exact: all 1,712,304 boards | ≈ 230 ms | 82.64%, exact |
-| Monte Carlo: 1,000,000 boards | ≈ 240 ms | 82.61% ± 0.07% |
+| Exact: all 1,712,304 boards | ≈ 70 ms | 82.64%, exact |
+| Monte Carlo: 1,000,000 boards | ≈ 75 ms | 82.61% ± 0.07% |
 
-For known hole cards, exact enumeration wins: it gives the exact answer in about the same time. Each
-Monte Carlo board is also slower (about 4.2M boards/s against 7.5M). Random boards defeat the branch
-predictor just like the random-hand evaluator benchmark does, and the evaluation rate matches that
-benchmark.
+(With the naive evaluator these took about 230 ms and 240 ms.) For known hole cards, exact
+enumeration wins: it gives the exact answer in about the same time.
+
+Each Monte Carlo trial also costs more than an enumerated board: about 75 ns against 40 ns. Timing
+trials that deal different numbers of cards shows where it goes. A trial costs about 36 ns when
+nothing is dealt (a complete board), 47 ns with 1 card to deal, 68 ns with 2 and 85 ns with 5. So
+dealing is likely more than half of a preflop trial, most probably because of the two 64-bit
+divisions per card inside `uniformBelow`. A division-free method (Lemire's) is the obvious next
+optimisation. It would change which boards a given seed deals, though, so it's a deliberate decision
+rather than a quiet fix.
 
 Monte Carlo pays off when the exact space explodes. Exact equity for AsKs against *one random hand*
-needs all C(50,2) = 1,225 opponent hands × 1,712,304 boards ≈ 2.1 billion boards, about 5 minutes at
-today's speed. Monte Carlo gets within ±0.1% in a fraction of a second. That's the situation ranges
-(step 7) create.
+needs all C(50,2) = 1,225 opponent hands × 1,712,304 boards ≈ 2.1 billion boards, still more than
+a minute even with the fast evaluator. Monte Carlo gets within ±0.1% in a fraction of a second. That's
+the situation ranges (step 7) create.
 
-## 5. Testing approach
+## 6. Testing approach
 
 - **Reference values**, checked to the published two decimals:
   - AsAh vs KsKh: 82.36 / 17.09 / 0.54 tie
@@ -383,7 +520,7 @@ on MSVC and GCC. With raw output, the benchmark's "1M random hands" are identica
 and GCC builds print the same checksum. Monte Carlo relies on the same property: for a given seed it
 deals the same boards, and prints the same numbers, on every platform.
 
-## 6. Build and tooling notes
+## 7. Build and tooling notes
 
 - **Sanitizers:** `add_compile_options()` only affects targets created *after* it. The original
   `CMakeLists.txt` added the sanitizer flags after `add_library(poker)`, so the library itself was
@@ -393,8 +530,13 @@ deals the same boards, and prints the same numbers, on every platform.
   copies the ASan runtime DLL next to each executable.
 - Warnings: the library builds cleanly with `/W4` (MSVC) and with
   `-Wall -Wextra -Wpedantic -Wconversion -Wshadow -Wsign-conversion` (GCC 15).
+- **No CPU-specific flags:** the builds don't use `-march=native`, `-mpopcnt` or similar, so the
+  binaries run on any x86-64 CPU (and the code stays ready for WebAssembly). The price is that
+  `std::popcount` can be a library call, which is why the fast evaluator avoids it in its hot path.
+- **32-bit builds:** everything also builds warning-free and passes all tests as 32-bit (Win32),
+  where `size_t` is 32 bits, as it will be for WebAssembly's wasm32 target.
 
-## 7. Quick answers to likely interview questions
+## 8. Quick answers to likely interview questions
 
 - **Why a bitmask instead of `std::vector<Card>`?** Set operations become single instructions, there
   is no allocation, and a whole hand fits in one register.
@@ -424,5 +566,18 @@ deals the same boards, and prints the same numbers, on every platform.
   runs which chunk, and in whatever order.
 - **Why `std::variant` and not exceptions?** Invalid input is expected at an API boundary, the core
   library avoids exceptions, and the error enum lets callers react to the specific problem.
-- **What would you do next for speed?** A lookup-table evaluator (step 5), then multithreading
-  (step 6), always testing against this reference implementation.
+- **How does the fast evaluator work?** If a suit has 5+ cards, its 13-bit rank set indexes a flush
+  table. Otherwise only the rank counts matter, and a perfect hash (each count vector's position in
+  sorted order) indexes a 49,205-entry table. Every entry was filled in by the naive evaluator at
+  startup, in about 6 ms.
+- **How do you know the fast evaluator is right?** It's compared with the reference on every possible
+  5-, 6- and 7-card hand (over 150 million), and the tables are checked to be exactly as big as the
+  number of possibilities.
+- **What surprised you while optimising?** Removing an early loop exit made it 1.6× faster, because a
+  branch the CPU can't predict costs more than a few extra additions. And `std::popcount` turned out
+  to be a library call on GCC without `-mpopcnt`. Measuring beat guessing both times.
+- **Why not the Two Plus Two evaluator?** Its 130 MB table is slow to build and too big for the
+  browser. Ours is 330 KB, fits in L2 cache, and is still about 9× faster than the reference.
+- **What would you do next for speed?** Multithreading (step 6), then division-free random numbers
+  for Monte Carlo and reusing the board's work across players in enumeration, always testing
+  against the reference implementations.

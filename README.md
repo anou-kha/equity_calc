@@ -5,14 +5,14 @@ A fast Texas Hold'em equity calculator written in modern C++20.
 > 🚧 Work in progress — see the roadmap below.
 
 ## Features
-- ✅ 7-card hand evaluator (naive reference implementation, verified against all 133,784,560
-  seven-card hands)
+- ✅ 7-card hand evaluator: a lookup-table evaluator (80–90 M hands/s) built from, and checked
+  against, a simple reference implementation on every one of the 133,784,560 seven-card hands
 - ✅ Exact equity by enumeration: 2–9 players, preflop/flop/turn/river, dead cards, exact split pots
 - ✅ Monte Carlo equity with 95% confidence intervals; seeded, so results are reproducible on every
   platform
 - ✅ Command-line interface
-- Planned: optimised lookup-table evaluator, multithreading, range notation (`AKs, QQ+, A5s-A2s`)
-  and range-vs-range equity, WebAssembly build
+- Planned: multithreading, range notation (`AKs, QQ+, A5s-A2s`) and range-vs-range equity,
+  WebAssembly build
 
 ## Build
 
@@ -38,10 +38,12 @@ ctest --test-dir build -C Release --output-on-failure
 **Sanitizers:** configure a Debug build with `-DPOKER_SANITIZE=ON`. With GCC/Clang this enables
 AddressSanitizer and UndefinedBehaviorSanitizer; MSVC only supports AddressSanitizer.
 
-**Slow tests:** one test checks all 133,784,560 seven-card hands and is disabled by default
-(about 10 s in Release). Run it explicitly with:
+**Slow tests:** a few tests check every 6- and 7-card hand (133,784,560 of the latter): the known
+category frequencies for both evaluators, and that the fast evaluator matches the reference on
+every hand. They take about 30 s together in Release, so they are disabled by default. Run them
+explicitly with:
 ```bash
-./build/poker_tests --gtest_also_run_disabled_tests --gtest_filter=*AllSevenCard*
+./build/poker_tests --gtest_also_run_disabled_tests --gtest_filter=*AllSevenCard*:FastEvaluator.*
 ```
 
 ## Usage
@@ -54,7 +56,7 @@ Hand           Win       Tie    Equity
 AsKs        56.06%     0.00%    56.06%
 QhQd        43.94%     0.00%    43.94%
 
-990 boards enumerated in 0.1 ms
+990 boards enumerated in 0.038 ms
 ```
 
 - Give each player's two hole cards as one argument (`AsKs` or `"As Ks"`), for 2–9 players.
@@ -71,7 +73,7 @@ Hand           Win       Tie    Equity
 AsAh        82.36%     0.54%    82.64%
 KsKh        17.09%     0.54%    17.36%
 
-1712304 boards enumerated in 266.8 ms
+1712304 boards enumerated in 68.6 ms
 ```
 
 **Monte Carlo:** add `--trials <n>` to deal that many random boards instead of enumerating them
@@ -87,7 +89,7 @@ Hand           Win       Tie    Equity    95% margin
 AsKs        56.09%     0.00%    56.09%     +/- 0.10%
 QhQd        43.91%     0.00%    43.91%     +/- 0.10%
 
-Monte Carlo: 1000000 random boards (seed 1) in 156.9 ms
+Monte Carlo: 1000000 random boards (seed 1) in 53.9 ms
 The true equity is within the margin for 95% of seeds.
 ```
 
@@ -99,20 +101,26 @@ Run `poker_bench` (from a Release build) for the benchmarks below.
 
 ## Benchmarks
 
-Baseline numbers for the naive reference evaluator, measured on an AMD Ryzen 9 5900HS laptop
-(8 cores, single-threaded), Windows 11. Each figure is the fastest of several passes within a run;
-separate runs varied by up to about 8%. The CLI example above is a single cold run, so it is slower.
+Measured on an AMD Ryzen 9 5900HS laptop (8 cores, single-threaded), Windows 11, Release builds.
+Each figure is the median of three runs of `poker_bench`, which reports the fastest of several
+passes; separate runs vary by up to about 8%.
 
 | Benchmark | MSVC 19.52 (`/O2`) | GCC 15.1 (`-O3`, MSYS2) |
 |-----------|-------------------:|------------------------:|
-| Naive evaluator, 1M random 7-card hands | 8.8 M hands/s | 8.6 M hands/s |
-| Exact equity, AsAh vs KsKh preflop (1,712,304 boards) | 230 ms | 216 ms |
-| Monte Carlo, same spot, 1M trials (82.61% ± 0.07%) | 240 ms | 225 ms |
+| Naive evaluator, 1M random 7-card hands | 9.7 M hands/s | 9.5 M hands/s |
+| Fast evaluator, the same hands | 80 M hands/s | 93 M hands/s |
+| Exact equity, AsAh vs KsKh preflop (1,712,304 boards) | 69 ms | 50 ms |
+| Monte Carlo, same spot, 1M trials (82.61% ± 0.07%) | 74 ms | 62 ms |
+| Building the fast evaluator's tables (once) | 5.8 ms | 5.2 ms |
 
-| Evaluator | Hands/sec | Speedup |
-|-----------|-----------|---------|
-| Naive     | 8.8 M     | 1×      |
-| Optimised | –         | –       |
+| Evaluator | Hands/sec (MSVC) | Speedup |
+|-----------|-----------------:|--------:|
+| Naive (reference) | 9.7 M | 1× |
+| Fast (lookup tables) | 80 M | 8.3× |
+
+With the naive evaluator, the exact preflop spot took about 230 ms (MSVC) and 1M Monte Carlo
+trials about 240 ms, so equity got about 3× faster: less than the evaluator's 8–10×, because
+enumerating boards and drawing random numbers now take a large share of the time.
 
 ## Project layout
 
@@ -129,7 +137,7 @@ docs/            design notes (see docs/design.md)
 - [x] Naive hand evaluator
 - [x] Exact equity (enumeration)
 - [x] Monte Carlo equity
-- [ ] Fast evaluator + benchmarks
+- [x] Fast evaluator + benchmarks
 - [ ] Multithreading
 - [ ] Range parsing & range-vs-range equity
 - [ ] WebAssembly build + web UI

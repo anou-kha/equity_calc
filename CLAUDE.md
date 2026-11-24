@@ -49,6 +49,10 @@ compiled with `-Wall -Wextra -Wpedantic -Wconversion -Wshadow`.
   `poker::Rng`, `uniformBelow` and `mixSeed` (`random.hpp`), never `std::uniform_int_distribution`
   or `rand() % n`: the standard distributions give different numbers on different standard
   libraries, and plain modulo is biased.
+- Hand evaluation: `evaluate()` (lookup tables, `fast_evaluator.cpp`) must always return exactly
+  what `evaluateNaive()` (the reference, `evaluator.cpp`) returns; the tests compare them on every
+  hand. The fast evaluator's tables are built *from* `evaluateNaive()`, so treat changes to the
+  reference with great care, and use `evaluate()` everywhere else.
 - Add new source files to `CMakeLists.txt` explicitly (no globbing).
 - Small, focused commits with descriptive messages.
 
@@ -57,7 +61,7 @@ compiled with `-Wall -Wextra -Wpedantic -Wconversion -Wshadow`.
 2. ✅ Naive 5/7-card hand evaluator (reference implementation)
 3. ✅ Exact equity via enumeration (heads-up and multiway, with partial boards)
 4. ✅ Monte Carlo equity with seeded RNG + confidence interval reporting
-5. Fast evaluator (lookup tables / perfect hashing) — benchmark vs naive
+5. ✅ Fast evaluator (lookup tables / perfect hashing) — benchmark vs naive
 6. Multithreaded Monte Carlo
 7. Range parsing (`AKs, QQ+, A5s-A2s, 22+`) and range-vs-range equity
 8. CLI polish, then WebAssembly build + web frontend
