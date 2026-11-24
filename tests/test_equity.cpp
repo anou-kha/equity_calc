@@ -22,20 +22,10 @@ using poker::EquityResult;
 using poker::HoleCards;
 using poker::kPotUnits;
 using poker::test::cards;
+using poker::test::hole;
+using poker::test::holes;
 
 constexpr CardMask kFullDeck = (CardMask{1} << Card::kNumCards) - 1;
-
-HoleCards hole(std::string_view text) {
-  const auto parsed = poker::parseHoleCards(text);
-  if (!parsed) throw std::invalid_argument("bad hole cards in test: " + std::string(text));
-  return *parsed;
-}
-
-std::vector<HoleCards> holes(std::initializer_list<std::string_view> hands) {
-  std::vector<HoleCards> players;
-  for (std::string_view hand : hands) players.push_back(hole(hand));
-  return players;
-}
 
 // Runs exactEquity on valid input; an error fails the test.
 EquityResult equity(std::initializer_list<std::string_view> hands, std::string_view board = "",
@@ -273,7 +263,8 @@ TEST(EquityValidation, NotEnoughCardsLeft) {
 TEST(EquityValidation, EveryErrorHasAMessage) {
   for (const EquityError e :
        {EquityError::kTooFewPlayers, EquityError::kTooManyPlayers, EquityError::kInvalidCard,
-        EquityError::kBadBoardSize, EquityError::kDuplicateCard, EquityError::kNotEnoughCards}) {
+        EquityError::kBadBoardSize, EquityError::kDuplicateCard, EquityError::kNotEnoughCards,
+        EquityError::kNoTrials}) {
     EXPECT_FALSE(poker::toString(e).empty());
   }
 }

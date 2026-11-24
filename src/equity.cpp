@@ -6,7 +6,7 @@
 // likely, the counts divided by the number of boards are exact probabilities: no sampling error.
 //
 // Trade-off: the number of boards grows fast (1.7M heads-up preflop), so this is only practical for
-// known hole cards; Monte Carlo (roadmap step 4) handles the cases where enumeration is too slow.
+// known hole cards; Monte Carlo (monte_carlo.hpp) handles the cases where enumeration is too slow.
 // The inner loop does no heap allocation: the deck and per-player data live in fixed-size arrays.
 #include "poker/equity.hpp"
 
@@ -62,6 +62,8 @@ std::string_view toString(EquityError error) {
       return "the same card appears more than once";
     case EquityError::kNotEnoughCards:
       return "not enough cards left to complete the board";
+    case EquityError::kNoTrials:
+      return "Monte Carlo needs at least 1 trial";
   }
   return "unknown error";
 }

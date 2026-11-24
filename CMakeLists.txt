@@ -57,6 +57,7 @@ add_library(poker
   src/card.cpp
   src/equity.cpp
   src/evaluator.cpp
+  src/monte_carlo.cpp
   src/random.cpp
   src/showdown.cpp
 )
@@ -88,6 +89,7 @@ if(POKER_BUILD_TESTS)
     tests/test_card.cpp
     tests/test_equity.cpp
     tests/test_evaluator.cpp
+    tests/test_monte_carlo.cpp
     tests/test_random.cpp
   )
   target_link_libraries(poker_tests PRIVATE poker GTest::gtest_main)

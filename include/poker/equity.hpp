@@ -43,6 +43,7 @@ enum class EquityError {
   kBadBoardSize,    // the board must have 0, 3, 4 or 5 cards
   kDuplicateCard,   // the same card appears twice among hole cards, board and dead cards
   kNotEnoughCards,  // the dead cards leave too few cards to complete the board
+  kNoTrials,        // Monte Carlo was asked for 0 trials
 };
 
 std::string_view toString(EquityError error);

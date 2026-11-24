@@ -3,11 +3,13 @@
 // Small helpers shared by the test files.
 
 #include <bit>
+#include <initializer_list>
 #include <ostream>
 #include <random>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "poker/card.hpp"
 #include "poker/evaluator.hpp"
@@ -25,6 +27,20 @@ inline CardMask cards(std::string_view text) {
   const auto parsed = parseCards(text);
   if (!parsed) throw std::invalid_argument("bad cards in test: " + std::string(text));
   return toMask(*parsed);
+}
+
+// Parses one player's hole cards like "AsKs"; throws (failing the test) on malformed input.
+inline HoleCards hole(std::string_view text) {
+  const auto parsed = parseHoleCards(text);
+  if (!parsed) throw std::invalid_argument("bad hole cards in test: " + std::string(text));
+  return *parsed;
+}
+
+// Parses several players' hole cards, e.g. holes({"AsKs", "QhQd"}).
+inline std::vector<HoleCards> holes(std::initializer_list<std::string_view> hands) {
+  std::vector<HoleCards> players;
+  for (std::string_view hand : hands) players.push_back(hole(hand));
+  return players;
 }
 
 // A uniformly random hand of `size` distinct cards. It uses the generator's raw output rather than

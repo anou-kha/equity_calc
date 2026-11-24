@@ -1,7 +1,7 @@
 #pragma once
 
 // Internal building blocks shared by exact enumeration (equity.cpp) and Monte Carlo
-// (roadmap step 4): input validation, the remaining deck, and scoring a showdown. Keeping them in
+// (monte_carlo.cpp): input validation, the remaining deck, and scoring a showdown. Keeping them in
 // one place means both methods score boards with exactly the same code, so tests comparing the two
 // only test how the boards are chosen. Not part of the public API.
 
