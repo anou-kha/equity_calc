@@ -15,6 +15,7 @@
 #include "poker/card.hpp"
 #include "poker/equity.hpp"
 #include "poker/evaluator.hpp"
+#include "poker/monte_carlo.hpp"
 
 namespace {
 
@@ -81,6 +82,27 @@ void benchExactEquityPreflop() {
             << static_cast<double>(boards) / seconds / 1e6 << " M boards/s)\n";
 }
 
+// The same spot by Monte Carlo, to compare with exact enumeration: how long 1M random boards take,
+// and how precise the answer is.
+void benchMonteCarloPreflop() {
+  constexpr int kTimedPasses = 3;
+  constexpr uint64_t kTrials = 1'000'000;
+  const std::vector<poker::HoleCards> players = {*poker::parseHoleCards("AsAh"),
+                                                 *poker::parseHoleCards("KsKh")};
+
+  poker::Estimate equity;
+  const double seconds = fastestPassSeconds(kTimedPasses, [&] {
+    const auto outcome = poker::monteCarloEquity(players, 0, 0, {.trials = kTrials, .seed = 1});
+    equity = std::get<poker::MonteCarloResult>(outcome).equity(0);
+  });
+
+  std::cout << "monte carlo, AsAh vs KsKh preflop: " << std::fixed << std::setprecision(1)
+            << seconds * 1000.0 << " ms  (" << kTrials << " trials, "
+            << static_cast<double>(kTrials) / seconds / 1e6 << " M trials/s, AsAh equity "
+            << std::setprecision(2) << 100.0 * equity.value << "% +/- " << 100.0 * equity.margin95()
+            << "%)\n";
+}
+
 }  // namespace
 
 int main() {
@@ -89,5 +111,6 @@ int main() {
 #endif
   benchNaiveEvaluator();
   benchExactEquityPreflop();
+  benchMonteCarloPreflop();
   return 0;
 }
