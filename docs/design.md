@@ -224,7 +224,7 @@ gives the same answers by construction; the tests then confirm it on every hand.
 
 The tables live in a function-local `static`, which C++ guarantees to initialise exactly once even if
 several threads call `evaluate()` for the first time simultaneously ("magic statics"). That matters
-for multithreading (step 6). `buildEvaluatorTables()` builds them up front, so timings (and later a
+for multithreading (section 6). `buildEvaluatorTables()` builds them up front, so timings (and later a
 user interface) don't include the one-off cost.
 
 `evaluate()` itself is then short:
@@ -360,9 +360,9 @@ constructed, so only the board size needs a runtime check.
 Heads-up preflop takes about 70 ms with MSVC and 50 ms with GCC (Release, single thread): 1.7M
 boards × 2 evaluations. With the naive evaluator it took about 230 ms. That 3–4× gain is smaller
 than the evaluator's 8–10×, because the evaluator is no longer nearly all of the work: enumerating
-boards and comparing ranks now take a visible share. Multithreading (step 6) can split the
-combinations between threads. Monte Carlo (section 5) is for cases where enumeration is too slow,
-such as ranges.
+boards and comparing ranks now take a visible share. Multithreading (section 6) shares the boards
+between threads, about 7× faster on 8 cores. Monte Carlo (section 5) is for cases where enumeration
+is too slow, such as ranges.
 
 Interestingly, with the naive evaluator, enumeration evaluated about 15 M hands/s, faster than the
 8.8 M/s random-hand benchmark. The likely reason is that consecutive boards in enumeration order are
@@ -445,9 +445,9 @@ The trials run in chunks of 65,536. Chunk `c` gets its own generator, seeded wit
 - All the totals are **integers**, and integer addition gives the same result in any order.
   Floating-point addition doesn't: `(a + b) + c` can differ from `a + (b + c)` in the last bits.
 
-Together, these mean the result depends only on the inputs, the trial count and the seed. When step
-6 hands chunks to several threads, the results will be bit-identical to today's single-threaded
-ones, whatever the number of threads or the order they finish in.
+Together, these mean the result depends only on the inputs, the trial count and the seed.
+Multithreading (section 6) relies on exactly this: chunks run on any number of threads, finishing
+in any order, and the result stays bit-identical.
 
 ### How it's tested
 
@@ -490,7 +490,130 @@ needs all C(50,2) = 1,225 opponent hands × 1,712,304 boards ≈ 2.1 billion boa
 a minute even with the fast evaluator. Monte Carlo gets within ±0.1% in a fraction of a second. That's
 the situation ranges (step 7) create.
 
-## 6. Testing approach
+## 6. Multithreading
+
+Exact enumeration and Monte Carlo can both share their work between threads
+(`ExactOptions{.threads}`, `MonteCarloOptions{.threads}`, `--threads` in the CLI). The library
+defaults to 1 thread, so it never starts threads behind a caller's back; a server or a web page may
+manage threads itself. The CLI uses all hardware threads by default.
+
+### Same answer on any number of threads
+
+Two rules make the result independent of the number of threads:
+
+1. **Split the work into tasks whose result depends only on the task's number,** never on which
+   thread runs it or when. For Monte Carlo a task is a 65,536-trial chunk, and chunk `c` always uses
+   random stream `mixSeed(seed, c)` and the same starting deck, exactly as section 5 set up. For
+   exact enumeration a task is "every board that starts with these two missing cards".
+2. **Keep the totals as integers and combine them at the end.** Integer addition gives the same
+   answer in any order, so it doesn't matter which thread finishes first.
+
+The tests check that 1, 2, 3, 5, 8 and 64 threads, and "all of them", give bit-identical results.
+
+### How the threads share the work
+
+One small helper, `detail::runInParallel` in `src/parallel.hpp`, does this for both methods. Each
+thread, including the one that called it, runs:
+
+```cpp
+State local{};
+for (uint64_t i = nextTask.fetch_add(1, std::memory_order_relaxed); i < numTasks;
+     i = nextTask.fetch_add(1, std::memory_order_relaxed)) {
+  task(i, local);
+}
+states[threadIndex] = local;
+```
+
+- **An atomic counter hands out tasks.** A thread that finishes early just takes the next task, so
+  nobody waits for a slow thread's fixed share. Splitting the work up front (thread `t` gets tasks
+  `t`, `t + T`, ...) would make everyone wait for the slowest thread.
+- **Each thread adds into its own local totals** and copies them out once at the end. So there are no
+  locks, and no **false sharing**: threads that update different variables sitting in the same 64-byte
+  cache line still slow each other down, because the CPU's caches pass the whole line back and forth
+  between cores.
+- **`memory_order_relaxed` is enough** for the counter. It only has to give each task to exactly one
+  thread, which any atomic increment guarantees. The results reach the calling thread through
+  `join()`, which guarantees everything a thread wrote is visible afterwards.
+- **The calling thread works too,** so `threads = 1` starts no threads at all. If the operating system
+  refuses to start a thread, the ones already running share its tasks, and every task still runs
+  exactly once.
+- **No more threads than there is work for.** Monte Carlo uses at most one thread per chunk. Exact
+  enumeration gives each thread at least 25,000 boards: starting a thread costs tens of
+  microseconds, about as long as scoring a thousand boards, so a flop or a turn stays on one thread.
+- **A new `std::thread` per call** rather than a persistent thread pool. Starting threads costs well
+  under a millisecond, which is small next to the work. A pool would only pay off for many tiny
+  calls, and it adds real complexity.
+
+### Task size: a measured fix
+
+The first version split exact enumeration by the first missing card only: 44 tasks. But they're
+very uneven. Task 0 (every board starting with the deck's first card) has C(47,4) = 178,365 of the
+1,712,304 boards, over 10% of the work. With 16 threads on 8 cores, each thread runs at about half a
+core's speed, so that one task alone takes about 2 × 10% × 67 ms ≈ 13 ms. That is roughly the total
+time measured (about 12 ms, 5–6×): everyone else finished and waited. Splitting by the first *two*
+missing cards gives 990 tasks, the biggest under 1% of the work, and 16 threads then reached about
+7×. The general lesson: the speedup can't beat total time ÷ the longest single task.
+
+### Results, and why not 16×
+
+| AsAh vs KsKh preflop, MSVC | 1 thread | 2 | 4 | 8 | 16 |
+|---|---|---|---|---|---|
+| Exact, 1,712,304 boards | 69 ms | 1.8× | 2.5× | 4.5× | 6.9× (10 ms) |
+| Monte Carlo, 10M trials | 749 ms | 1.9× | 2.5× | 4.8× | 7.0× (107 ms) |
+
+The laptop has 8 physical cores, each running two hardware threads (SMT, "hyper-threading"). Two
+threads on one core share its execution units, which I measured by pinning 2-thread Monte Carlo runs
+to particular CPUs:
+
+| 2 threads, Monte Carlo 10M trials | MSVC | GCC |
+|---|---|---|
+| Same physical core | 1.3× | 1.5× |
+| Two different cores | 1.8× | 1.9× |
+
+Without pinning, Windows decides, and the GCC build's two threads often landed on the same core, so
+its 2-thread results swung between about 1.4× and 2×. On top of that, a laptop runs one busy core at
+a higher clock than eight busy cores (I didn't measure the clocks, but this is how its boost works).
+Together these explain most of the gap between the ~7× measured and the 16× you might expect.
+
+### A performance regression, found by bisection
+
+After the threading change, single-threaded Monte Carlo on GCC was **25% slower** than before (about
+250 ms instead of 200 ms for 3M trials), even though the per-trial work hadn't changed. Comparing
+`main` and the branch side by side, one change at a time:
+
+| Experiment | Time (main ≈ 200 ms) |
+|---|---|
+| The new code as written | ≈ 250 ms |
+| `main` plus only the thread-library link | ≈ 200 ms: not the cause |
+| Copying captured variables into locals | ≈ 300 ms: worse |
+| Per-thread totals on the heap | ≈ 255 ms: no change |
+| Loop called directly, without the helper | ≈ 340 ms: even worse |
+| **Random generator on the heap** | **≈ 200 ms in every variant**, on both compilers |
+
+The big swings from small, unrelated changes pointed at memory layout rather than extra work.
+`std::mt19937_64` keeps **2.5 KB of state**, and it lived on the stack right next to the hot loop.
+Every trial makes about a dozen function calls, each writing return addresses and saved registers to
+the stack. The most likely mechanism is **4K aliasing**: when a load's address shares its low 12 bits
+with a recent store to a different address, the CPU briefly assumes they might be the same and
+stalls. Which parts of the generator's state collide depends on the exact stack layout, so
+rearranging the code moved the problem around. I couldn't confirm it with hardware performance
+counters on this machine, but moving only the generator to the heap removed the slowdown in every
+variant, and over six alternating rounds the branch matched `main` (198.8 ms against 198.0 ms).
+
+Lessons: compare against the previous version before calling an optimisation done, change one thing
+at a time, and keep large objects off the stack frames of hot loops.
+
+### Data races and ThreadSanitizer
+
+A **data race** is two threads accessing the same memory without synchronisation, at least one of
+them writing. The design avoids races by construction (local totals, read-only shared inputs, an
+atomic counter, results passed back through `join()`), but that needs checking by a tool, not by
+review. **ThreadSanitizer** (`-DPOKER_TSAN=ON`, GCC/Clang) instruments every memory access and
+reports races. MSVC doesn't offer it and it can't be combined with AddressSanitizer, so CI runs it
+as its own Linux job. The fast evaluator's lazily built tables are also exercised by 8 threads racing
+to make the first call.
+
+## 7. Testing approach
 
 - **Reference values**, checked to the published two decimals:
   - AsAh vs KsKh: 82.36 / 17.09 / 0.54 tie
@@ -520,7 +643,7 @@ on MSVC and GCC. With raw output, the benchmark's "1M random hands" are identica
 and GCC builds print the same checksum. Monte Carlo relies on the same property: for a given seed it
 deals the same boards, and prints the same numbers, on every platform.
 
-## 7. Build and tooling notes
+## 8. Build and tooling notes
 
 - **Sanitizers:** `add_compile_options()` only affects targets created *after* it. The original
   `CMakeLists.txt` added the sanitizer flags after `add_library(poker)`, so the library itself was
@@ -535,8 +658,12 @@ deals the same boards, and prints the same numbers, on every platform.
   `std::popcount` can be a library call, which is why the fast evaluator avoids it in its hot path.
 - **32-bit builds:** everything also builds warning-free and passes all tests as 32-bit (Win32),
   where `size_t` is 32 bits, as it will be for WebAssembly's wasm32 target.
+- **ThreadSanitizer in CI:** recent Ubuntu kernels randomise memory addresses with more bits than
+  TSan's memory layout expects, which can make TSan programs abort at startup ("unexpected memory
+  mapping"). The CI job lowers the setting first (`sysctl vm.mmap_rnd_bits=28`), the usual
+  workaround.
 
-## 8. Quick answers to likely interview questions
+## 9. Quick answers to likely interview questions
 
 - **Why a bitmask instead of `std::vector<Card>`?** Set operations become single instructions, there
   is no allocation, and a whole hand fits in one register.
@@ -561,9 +688,9 @@ deals the same boards, and prints the same numbers, on every platform.
   to choose the tolerance: compare with the exact answer within 4 standard errors, and check that 95%
   intervals really cover the truth about 95% of the time. Finally, plant a bug and confirm the tests
   catch it.
-- **How will multithreading stay reproducible?** Each fixed-size chunk of trials has its own seeded
-  random stream and fresh deck, and the totals are integers. The result is the same whichever thread
-  runs which chunk, and in whatever order.
+- **How does multithreading stay reproducible?** Each task's result depends only on its number
+  (each Monte Carlo chunk has its own seeded random stream and fresh deck), and the totals are
+  integers. The result is the same whichever thread runs which task, and in whatever order.
 - **Why `std::variant` and not exceptions?** Invalid input is expected at an API boundary, the core
   library avoids exceptions, and the error enum lets callers react to the specific problem.
 - **How does the fast evaluator work?** If a suit has 5+ cards, its 13-bit rank set indexes a flush
@@ -578,6 +705,25 @@ deals the same boards, and prints the same numbers, on every platform.
   to be a library call on GCC without `-mpopcnt`. Measuring beat guessing both times.
 - **Why not the Two Plus Two evaluator?** Its 130 MB table is slow to build and too big for the
   browser. Ours is 330 KB, fits in L2 cache, and is still about 9× faster than the reference.
-- **What would you do next for speed?** Multithreading (step 6), then division-free random numbers
-  for Monte Carlo and reusing the board's work across players in enumeration, always testing
-  against the reference implementations.
+- **How do the threads share the work?** An atomic counter hands out task numbers, and each thread
+  takes the next one when it's ready. Each adds into its own local totals, combined after `join()`:
+  no locks, and no false sharing.
+- **What is false sharing?** Threads writing *different* variables that sit in the same 64-byte cache
+  line. The caches have to pass the line back and forth between cores, so the threads slow each
+  other down even though they never share data.
+- **Why is `memory_order_relaxed` enough for the counter?** It only has to give each task to exactly
+  one thread. The results become visible to the caller through `join()`, not through the counter.
+- **Why ~7× on 16 hardware threads, not 16×?** There are only 8 physical cores, and two threads on
+  one core get about 1.3–1.5×, not 2× (measured by pinning them). A laptop also runs fewer busy cores
+  at higher clocks. And for exact enumeration, the speedup can't beat total time ÷ the biggest task,
+  which is why it splits by the first two missing cards (990 tasks), not one (44 uneven tasks).
+- **Why not a thread pool?** Starting threads costs well under a millisecond, small next to the work.
+  A pool pays off for many tiny calls, and adds complexity.
+- **Tell me about a hard bug.** Single-threaded Monte Carlo got 25% slower after the threading
+  change, with no extra work per trial. Bisecting one change at a time ruled out the thread library,
+  variable capture and where the totals lived. Moving the random generator's 2.5 KB state off the
+  stack fixed it in every variant; the most likely cause was 4K aliasing between that state and
+  the stack writes of the loop's function calls.
+- **What would you do next for speed?** Division-free random numbers for Monte Carlo (Lemire's
+  method) and reusing the board's work across players in enumeration, always testing against the
+  reference implementations.
