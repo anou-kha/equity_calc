@@ -3,14 +3,15 @@
 How the equity calculator works, and why it is built this way. The pipeline so far:
 
 ```
-"AsKs" "QhQd" --board "Js Ts 2h"
-   │  parseHoleCards / parseCards          (card.hpp)
+"QQ+, AKs" "random" --board "Js Ts 2h"
+   │  parseRange / parseCards                       (range.hpp, card.hpp)
    ▼
-CardMask bitsets (one bit per card)
-   │  exactEquity: every possible board    (equity.hpp)
-   │  monteCarloEquity: N random boards    (monte_carlo.hpp)
+Ranges of hands, CardMask bitsets (one bit per card)
+   │  exactEquity: every deal of the hands x every board   (equity.hpp)
+   │  monteCarloEquity: N random deals and boards          (monte_carlo.hpp)
+   │  ... shared out between threads                       (src/parallel.hpp)
    ▼
-evaluate(7 cards) -> HandRank per player   (evaluator.hpp, lookup tables)
+evaluate(7 cards) -> HandRank per player            (evaluator.hpp, lookup tables)
    │  compare ranks, count wins / ties
    ▼
 win %, tie %, equity % per player
@@ -485,10 +486,10 @@ divisions per card inside `uniformBelow`. A division-free method (Lemire's) is t
 optimisation. It would change which boards a given seed deals, though, so it's a deliberate decision
 rather than a quiet fix.
 
-Monte Carlo pays off when the exact space explodes. Exact equity for AsKs against *one random hand*
-needs all C(50,2) = 1,225 opponent hands × 1,712,304 boards ≈ 2.1 billion boards, still more than
-a minute even with the fast evaluator. Monte Carlo gets within ±0.1% in a fraction of a second. That's
-the situation ranges (step 7) create.
+Monte Carlo pays off when the exact space explodes, which is what ranges (section 7) do. Exact
+equity for AsAh against *one random hand* needs all C(50,2) = 1,225 opponent hands × 1,712,304
+boards ≈ 2.1 billion showdowns: about 10 s on 16 threads, over a minute on one. Monte Carlo gets
+within ±0.1% in a fraction of a second.
 
 ## 6. Multithreading
 
@@ -613,7 +614,96 @@ reports races. MSVC doesn't offer it and it can't be combined with AddressSaniti
 as its own Linux job. The fast evaluator's lazily built tables are also exercised by 8 threads racing
 to make the first call.
 
-## 7. Testing approach
+## 7. Ranges
+
+Players can hold **ranges** like `QQ+, AKs, A5s-A2s` or `random` instead of known hands. A known
+hand is just a range with one hand in it, so there is one code path for both, and known-hand
+results are bit-identical to before ranges existed. I checked that by compiling one small program
+against the old and the new library and comparing raw counts, exact and Monte Carlo, on 1 and 8
+threads.
+
+### Representing a range
+
+There are C(52,2) = 1,326 possible two-card hands ("combos"). Each gets a number from its cards'
+indices: with `hi > lo`, `index = hi·(hi − 1)/2 + lo`, which numbers every pair of cards exactly
+once, in order of the higher card and then the lower one. A `Range` keeps:
+
+- a **bitset** over those numbers, so "is this hand in the range?" is a single lookup;
+- a **vector of the hands sorted by number**, the range's *canonical order*.
+
+The canonical order matters for reproducibility: `"QQ+, AKs"` and `"AKs, AA, KK, QQ"` list exactly
+the same hands in exactly the same order. Seeded Monte Carlo picks hands by their position in that
+list, so it gives bit-identical results however the range is written. There's a test for that.
+
+### Parsing the notation
+
+Each comma-separated entry is a specific hand (`AhKh`), a *hand class*, or a range of classes:
+
+- **A class** expands to its hands: a pair to 6 (one per pair of suits), a suited hand to 4, an
+  offsuit hand to 12, both together to 16.
+- **`+` and dash ranges** are loops over classes: `QQ+` is QQ, KK, AA, `ATs+` raises the kicker up
+  to just below the ace, and `A5s-A2s` covers every kicker in between.
+- **Errors** say which entry is wrong and why, so parsing returns
+  `std::variant<Range, RangeError>`, where `RangeError` holds the entry and a reason (for example
+  "AKx" and "the last letter must be 's' (suited) or 'o' (offsuit)").
+
+A neat completeness test: every pair plus every two-rank class (`22+, A2+, K2+, …, 32`) must equal
+`random`, because 78 pairs + 78 classes × 16 hands = 1,326.
+
+### Exact range-vs-range equity
+
+Exact enumeration now runs over every **deal** (one hand from each player's range, no card used
+twice) combined with every board:
+
+- **Why plain counting is still correct:** every deal uses exactly two cards per player, so every
+  deal leaves the same number of cards to complete the board from, and every (deal, board) pair is
+  equally likely. The integer totals simply add up across deals, with no weighting needed.
+- **Threads:** the tasks become (deal, board prefix) pairs. A prefix is stored as two *deck
+  positions* rather than two cards, because each deal leaves a different deck, but always one of
+  the same size. Everything in section 6 then applies unchanged.
+- **Cost:** AA vs KK is 36 deals × 1,712,304 boards ≈ 61.6 million showdowns, about 0.35 s on 16
+  threads. `exactShowdowns()` computes that count up front (stopping once it passes a limit, since
+  counting the deals of wide ranges takes time too), which is how the CLI chooses a method: exact
+  up to 200 million showdowns, Monte Carlo beyond.
+
+### Monte Carlo: rejection sampling
+
+Each trial deals every player a hand from their range, then deals the board:
+
+1. **Hands:** draw a hand for every player independently. If any two collide (share a card), throw
+   the *whole* draw away and draw again. Every valid combination of hands is then exactly equally
+   likely. Players with a single possible hand just keep it and use no random numbers, which is
+   why known-hand results didn't change.
+2. **Board:** the partial Fisher–Yates shuffle from section 5, but if it picks a card that's in a
+   player's hand this trial, that pick is rejected and redrawn. Rejecting from a uniform choice over
+   a bigger set leaves a uniform choice over the cards that are really free.
+
+Because rejection sampling only finishes if some valid deal exists, the code first checks that one
+does, and reports `kNoValidDeal` otherwise (for example `AA` vs `AA` vs `AA`: there are only four
+aces).
+
+**The trap:** the tempting shortcut is to draw each player's hand only from those that don't collide
+with the hands already drawn. That is *biased*. Take player 1 with `AsAh, 4c6d` and player 2 with
+`AsKs, AhQh, KdKc`. `AsAh` collides with two of player 2's three hands, so of the 4 valid deals only
+one contains `AsAh`. With a river where player 1 wins only that deal, the true equity is exactly
+1/4. The shortcut still picks `AsAh` half the time, and gets 1/2.
+
+I mutation-tested this. With the shortcut swapped in, the test built for this case measured 0.4993
+instead of 0.25, as predicted. Every *other* Monte Carlo test still passed, including the
+comparisons with exact enumeration and with Wizard of Odds, because in those spots collisions are
+rare or symmetric. Without a test aimed at the bias, the bug would have gone unnoticed.
+
+### How we know it's right
+
+| Check | Result |
+|---|---|
+| AA against one random hand, exact | Wins, losses and draws (ours for A♠A♥, × 6 for the 6 AA hands) equal the [Wizard of Odds' exhaustive table](https://wizardofodds.com/games/texas-hold-em/2-player-game/) **exactly**: 10,689,050,508 / 1,827,970,020 / 68,413,872 (an opt-in test, about 10 s) |
+| AA and 72o against random, Monte Carlo | within 4 standard errors of the same table |
+| AA vs KK range | exactly 6 × (1·c₂ + 4·c₁ + 1·c₀), where c₂, c₁, c₀ are the known-hand results for 2, 1 and 0 shared suits (section 8), as suit symmetry requires: 81.95% / 18.05% |
+| AKs vs QQ range | exactly 12 × (shares a suit + shares none): 46.05% / 53.95% |
+| One-hand ranges | the same counts *and errors* as the HoleCards versions |
+
+## 8. Testing approach
 
 - **Reference values**, checked to the published two decimals:
   - AsAh vs KsKh: 82.36 / 17.09 / 0.54 tie
@@ -643,7 +733,7 @@ on MSVC and GCC. With raw output, the benchmark's "1M random hands" are identica
 and GCC builds print the same checksum. Monte Carlo relies on the same property: for a given seed it
 deals the same boards, and prints the same numbers, on every platform.
 
-## 8. Build and tooling notes
+## 9. Build and tooling notes
 
 - **Sanitizers:** `add_compile_options()` only affects targets created *after* it. The original
   `CMakeLists.txt` added the sanitizer flags after `add_library(poker)`, so the library itself was
@@ -663,7 +753,7 @@ deals the same boards, and prints the same numbers, on every platform.
   mapping"). The CI job lowers the setting first (`sysctl vm.mmap_rnd_bits=28`), the usual
   workaround.
 
-## 9. Quick answers to likely interview questions
+## 10. Quick answers to likely interview questions
 
 - **Why a bitmask instead of `std::vector<Card>`?** Set operations become single instructions, there
   is no allocation, and a whole hand fits in one register.
@@ -724,6 +814,18 @@ deals the same boards, and prints the same numbers, on every platform.
   variable capture and where the totals lived. Moving the random generator's 2.5 KB state off the
   stack fixed it in every variant; the most likely cause was 4K aliasing between that state and
   the stack writes of the loop's function calls.
+- **How do you represent a range?** A bitset over the 1,326 possible hands (each numbered from its
+  two card indices) for instant membership, plus the hands in a sorted canonical order, so seeded
+  results don't depend on how the range was written.
+- **How is range-vs-range equity weighted?** Every deal of the hands leaves the same number of cards
+  for the board, so every (deal, board) pair is equally likely and plain counting is correct.
+- **How do you deal random hands from overlapping ranges?** Rejection sampling: draw all the hands,
+  and redraw everything if two collide. Redrawing only the colliding player is biased toward hands
+  that collide often; a dedicated test shows the bias (1/2 instead of 1/4), and only that test
+  catches it.
+- **How do you know the range code is right?** Exact AA-vs-any-hand counts match the Wizard of Odds'
+  published enumeration to the last digit, range results equal suit-weighted sums of known-hand
+  results exactly, and a planted sampling bug is caught.
 - **What would you do next for speed?** Division-free random numbers for Monte Carlo (Lemire's
   method) and reusing the board's work across players in enumeration, always testing against the
   reference implementations.

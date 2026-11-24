@@ -12,8 +12,10 @@ A fast Texas Hold'em equity calculator written in modern C++20.
   platform
 - ✅ Multithreaded exact and Monte Carlo equity (about 7× faster on 8 cores), with results that are
   bit-identical for any number of threads
-- ✅ Command-line interface
-- Planned: range notation (`AKs, QQ+, A5s-A2s`) and range-vs-range equity, WebAssembly build
+- ✅ Hand ranges (`QQ+, AKs, A5s-A2s, random`) and range-vs-range equity, exact or Monte Carlo;
+  verified exactly against the Wizard of Odds' published hand-vs-random table
+- ✅ Command-line interface that picks exact or Monte Carlo automatically
+- Planned: WebAssembly build and web UI
 
 ## Build
 
@@ -41,28 +43,73 @@ AddressSanitizer and UndefinedBehaviorSanitizer; MSVC only supports AddressSanit
 `-DPOKER_TSAN=ON` build (GCC/Clang only) enables ThreadSanitizer, which detects data races; CI runs
 it on Linux.
 
-**Slow tests:** a few tests check every 6- and 7-card hand (133,784,560 of the latter): the known
-category frequencies for both evaluators, and that the fast evaluator matches the reference on
-every hand. They take about 30 s together in Release, so they are disabled by default. Run them
-explicitly with:
+**Slow tests:** a few tests are disabled by default because they take seconds even in Release:
+checking every 6- and 7-card hand (the known category frequencies for both evaluators, and that the
+fast evaluator matches the reference on every hand), and an exact AA-against-any-hand enumeration
+of 2.1 billion showdowns that must reproduce the Wizard of Odds' published counts. Run them with:
 ```bash
-./build/poker_tests --gtest_also_run_disabled_tests --gtest_filter=*AllSevenCard*:FastEvaluator.*
+./build/poker_tests --gtest_also_run_disabled_tests --gtest_filter=*AllSevenCard*:FastEvaluator.*:*WizardOfOdds*
 ```
 
 ## Usage
+
+Each player is a **range** of possible hands; a known hand like `AsKs` is simply a range of one.
 
 ```
 $ poker_cli AsKs QhQd --board Js Ts 2h
 Board: Js Ts 2h
 
-Hand           Win       Tie    Equity
-AsKs        56.06%     0.00%    56.06%
-QhQd        43.94%     0.00%    43.94%
+Range   Hands       Win       Tie    Equity
+AsKs        1    56.06%     0.00%    56.06%
+QhQd        1    43.94%     0.00%    43.94%
 
-990 boards enumerated in 0.074 ms on 1 thread
+990 boards enumerated in 0.199 ms on 1 thread
 ```
 
-- Give each player's two hole cards as one argument (`AsKs` or `"As Ks"`), for 2–9 players.
+```
+$ poker_cli AA KK
+Board: (none)
+
+Range   Hands       Win       Tie    Equity
+AA          6    81.71%     0.46%    81.95%
+KK          6    17.82%     0.46%    18.05%
+
+61,642,944 showdowns (36 deals of the hands x 1,712,304 boards) enumerated in 347.5 ms on 16 threads
+```
+
+| Range notation | Means | Hands |
+|---|---|---|
+| `QQ` | a pair | 6 |
+| `AKs` / `AKo` / `AK` | suited / offsuit / both | 4 / 12 / 16 |
+| `QQ+` | QQ, KK, AA | 18 |
+| `ATs+` | ATs, AJs, AQs, AKs (the kicker climbs) | 16 |
+| `JJ-99`, `A5s-A2s` | everything in between | 18, 16 |
+| `AhKh` | one specific hand | 1 |
+| `random` (or `any`) | any two cards | 1,326 |
+
+Combine entries with commas, and quote a range that contains spaces: `"QQ+, AKs"` (or write it
+without spaces, `QQ+,AKs`). Hands that would use a board or dead card are left out automatically.
+
+**Exact or Monte Carlo:** the answer is exact when that takes at most 200 million showdowns
+(about a second on 8 cores). Otherwise the CLI deals 10 million random hands and boards and reports
+a 95% margin of error, which shrinks like 1/√n: four times the trials halve it.
+
+```
+$ poker_cli "QQ+, AKs" random
+Board: (none)
+
+Range      Hands       Win       Tie    Equity    95% margin
+QQ+, AKs      22    79.31%     0.76%    79.70%     +/- 0.02%
+random      1326    19.92%     0.76%    20.30%     +/- 0.02%
+
+Monte Carlo: 10,000,000 random deals (seed 1) in 134.4 ms on 16 threads
+Exact enumeration would take over 200,000,000 showdowns; --exact forces it.
+The true equity is within the margin for 95% of seeds.
+```
+
+- `--exact` forces exact enumeration; `--trials <n>` asks for Monte Carlo with `n` trials, and
+  `--seed <n>` picks its random stream (default 1). The same command and seed always print the same
+  numbers.
 - `--board` takes 0, 3, 4 or 5 cards; `--dead` takes cards that can't be dealt (e.g. folded or
   exposed). Both read every following argument up to the next option, so `Js Ts 2h` and `JsTs2h`
   both work.
@@ -71,39 +118,8 @@ QhQd        43.94%     0.00%    43.94%
   single thread). Small jobs like the flop above use one thread, because starting threads would
   cost more than it saves. The number of threads never changes the answer.
 
-```
-$ poker_cli AsAh KsKh
-Board: (none)
-
-Hand           Win       Tie    Equity
-AsAh        82.36%     0.54%    82.64%
-KsKh        17.09%     0.54%    17.36%
-
-1712304 boards enumerated in 9.2 ms on 16 threads
-```
-
-**Monte Carlo:** add `--trials <n>` to deal that many random boards instead of enumerating them
-all. The answer then comes with a 95% margin of error, which shrinks like 1/√n: four times the
-trials halve it. `--seed <n>` picks the random stream (default 1), and the same command and seed
-always print the same numbers.
-
-```
-$ poker_cli AsKs QhQd --board Js Ts 2h --trials 1000000
-Board: Js Ts 2h
-
-Hand           Win       Tie    Equity    95% margin
-AsKs        56.09%     0.00%    56.09%     +/- 0.10%
-QhQd        43.91%     0.00%    43.91%     +/- 0.10%
-
-Monte Carlo: 1000000 random boards (seed 1) in 7.6 ms on 16 threads
-The true equity is within the margin for 95% of seeds.
-```
-
-For known hole cards like these, exact enumeration is about as fast and has no error at all, so
-Monte Carlo is mostly useful once ranges arrive (see the roadmap). See
-[docs/design.md](docs/design.md) for how both methods work.
-
-Run `poker_bench` (from a Release build) for the benchmarks below.
+See [docs/design.md](docs/design.md) for how all of this works. Run `poker_bench` (from a Release
+build) for the benchmarks below.
 
 ## Benchmarks
 
@@ -144,10 +160,17 @@ because there are only 8 physical cores (two hardware threads on one core share 
 1.3–1.5× rather than 2×), and a laptop runs fewer busy cores at higher clock speeds. See
 [docs/design.md](docs/design.md) for the measurements behind this.
 
+**Ranges** (16 threads):
+
+| Benchmark | MSVC | GCC |
+|-----------|-----:|----:|
+| Exact AA vs KK: 36 deals x 1,712,304 boards = 61.6M showdowns | 358 ms (172 M/s) | 261 ms (236 M/s) |
+| Monte Carlo `QQ+, AKs` vs any two cards, 10M trials | 136 ms | 116 ms |
+
 ## Project layout
 
 ```
-include/poker/   public headers: card.hpp, evaluator.hpp, equity.hpp, monte_carlo.hpp, random.hpp
+include/poker/   public headers: card, evaluator, equity, monte_carlo, random, range (.hpp)
 src/             library + CLI (main.cpp)
 tests/           GoogleTest unit tests
 bench/           benchmarks
@@ -161,5 +184,5 @@ docs/            design notes (see docs/design.md)
 - [x] Monte Carlo equity
 - [x] Fast evaluator + benchmarks
 - [x] Multithreading
-- [ ] Range parsing & range-vs-range equity
+- [x] Range parsing & range-vs-range equity
 - [ ] WebAssembly build + web UI

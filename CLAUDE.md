@@ -58,6 +58,10 @@ compiled with `-Wall -Wextra -Wpedantic -Wconversion -Wshadow`.
   chunk c always uses `mixSeed(seed, c)`), keep integer totals per thread, and combine them at
   the end. The library defaults to 1 thread; only the CLI uses all cores by default. Keep large
   objects (like `std::mt19937_64`'s 2.5 KB state) off the stack in hot loops, see design.md.
+- Ranges: a known hand is a one-hand `Range`, and must give exactly the same results and errors
+  as the HoleCards API. Keep a range's hands in canonical order (so seeded results don't depend on
+  how the range was written), and deal Monte Carlo hands by rejection sampling of the whole deal:
+  never redraw only the colliding player, which is biased (see `EveryValidDealIsEquallyLikely`).
 - Add new source files to `CMakeLists.txt` explicitly (no globbing).
 - Small, focused commits with descriptive messages.
 
@@ -68,5 +72,5 @@ compiled with `-Wall -Wextra -Wpedantic -Wconversion -Wshadow`.
 4. ✅ Monte Carlo equity with seeded RNG + confidence interval reporting
 5. ✅ Fast evaluator (lookup tables / perfect hashing) — benchmark vs naive
 6. ✅ Multithreaded Monte Carlo (and exact enumeration)
-7. Range parsing (`AKs, QQ+, A5s-A2s, 22+`) and range-vs-range equity
+7. ✅ Range parsing (`AKs, QQ+, A5s-A2s, 22+`) and range-vs-range equity
 8. CLI polish, then WebAssembly build + web frontend
