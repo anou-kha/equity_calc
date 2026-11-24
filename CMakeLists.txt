@@ -76,6 +76,7 @@ add_library(poker
   src/fast_evaluator.cpp
   src/monte_carlo.cpp
   src/random.cpp
+  src/range.cpp
   src/showdown.cpp
 )
 target_include_directories(poker PUBLIC include)
@@ -112,6 +113,7 @@ if(POKER_BUILD_TESTS)
     tests/test_monte_carlo.cpp
     tests/test_multithreading.cpp
     tests/test_random.cpp
+    tests/test_range.cpp
   )
   target_link_libraries(poker_tests PRIVATE poker GTest::gtest_main)
   # Must run before gtest_discover_tests' own post-build step, which launches the executable.
