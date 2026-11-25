@@ -97,11 +97,23 @@ void expectNear(const Estimate& estimate, double truth, double rounding = 0) {
 
 // ---- Exact: reference spots ---------------------------------------------------------------------
 
+// The two preflop range spots below score about 100 million showdowns. That's under a second in an
+// optimised build, but minutes in an unoptimised Debug build with sanitizers (CI's Linux Debug job
+// spent almost 3 minutes on them), so they only run in optimised builds: Release, and the
+// RelWithDebInfo ThreadSanitizer job. The same range code still runs in every Debug build through
+// the smaller tests further down. NDEBUG is the standard macro that optimised builds define.
+#ifdef NDEBUG
+constexpr bool kDebugBuild = false;
+#else
+constexpr bool kDebugBuild = true;
+#endif
+
 // Every AA hand faces 1 KK hand sharing both its suits, 4 sharing one and 1 sharing none, and suits
 // are symmetric, so the range result must be exactly 6 x (one of each pattern, weighted 1, 4, 1).
 // Two of those patterns are checked against published values in test_equity.cpp. The result is
 // the commonly quoted AA vs KK figure of about 81.9% / 18.1% (as in CLAUDE.md).
 TEST(RangeEquityExact, AcesVersusKingsIsTheSuitWeightedAverage) {
+  if (kDebugBuild) GTEST_SKIP() << "too slow without optimisation; runs in optimised builds";
   const EquityResult range = exact(ranges({"AA", "KK"}));
   EXPECT_EQ(range.deals, 36u);
   EXPECT_EQ(range.boards, 36u * 1'712'304);
@@ -117,6 +129,7 @@ TEST(RangeEquityExact, AcesVersusKingsIsTheSuitWeightedAverage) {
 // 4 x 3 x (one of each). AsKs vs QhQd is checked against a published value in test_equity.cpp, and
 // the range comes out at the commonly quoted 46% / 54% (as in CLAUDE.md).
 TEST(RangeEquityExact, AceKingSuitedVersusQueensIsTheSuitWeightedAverage) {
+  if (kDebugBuild) GTEST_SKIP() << "too slow without optimisation; runs in optimised builds";
   const EquityResult range = exact(ranges({"AKs", "QQ"}));
   EXPECT_EQ(range.deals, 24u);
   const EquityResult sharesSuit = exactKnown({"AsKs", "QsQh"});
