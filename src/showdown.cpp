@@ -2,7 +2,7 @@
 
 #include <algorithm>
 #include <bit>
-#include <cassert>
+#include <utility>
 
 #include "poker/evaluator.hpp"
 
@@ -36,19 +36,53 @@ std::optional<EquityError> validateDeal(std::span<const HoleCards> players, Card
   return std::nullopt;
 }
 
+std::vector<Range> singleHandRanges(std::span<const HoleCards> players) {
+  std::vector<Range> ranges(players.size());
+  for (size_t i = 0; i < players.size(); ++i) ranges[i].add(players[i]);
+  return ranges;
+}
+
 size_t missingBoardCards(CardMask board) {
   return static_cast<size_t>(kBoardSize - std::popcount(board));
 }
 
-Seats seatPlayers(std::span<const HoleCards> players) {
-  assert(players.size() <= kMaxPlayers);
-  Seats seats;
-  for (const HoleCards& hole : players) {
-    const CardMask mask = hole[0].mask() | hole[1].mask();
-    seats.holes[seats.count++] = mask;
-    seats.allHoleCards |= mask;
+int cardsLeftAfterDeal(CardMask board, CardMask dead, size_t numPlayers) {
+  return Card::kNumCards - std::popcount(board | dead) - 2 * static_cast<int>(numPlayers);
+}
+
+std::variant<LiveHands, EquityError> liveHands(std::span<const Range> players, CardMask board,
+                                               CardMask dead) {
+  if (players.size() < kMinPlayers) return EquityError::kTooFewPlayers;
+  if (players.size() > kMaxPlayers) return EquityError::kTooManyPlayers;
+  if ((board | dead) & ~kFullDeck) return EquityError::kInvalidCard;
+  if (!isValidBoardSize(std::popcount(board))) return EquityError::kBadBoardSize;
+  if (board & dead) return EquityError::kDuplicateCard;
+  if (cardsLeftAfterDeal(board, dead, players.size()) < kBoardSize - std::popcount(board)) {
+    return EquityError::kNotEnoughCards;
   }
-  return seats;
+
+  LiveHands hands;
+  hands.reserve(players.size());
+  for (const Range& range : players) {
+    std::vector<CardMask> live;
+    for (const HoleCards& hand : range.combos()) {
+      const CardMask mask = hand[0].mask() | hand[1].mask();
+      if (!(mask & (board | dead))) live.push_back(mask);
+    }
+    // A one-hand range is a known hand, and a known hand that uses a board or dead card is the
+    // same mistake as in the HoleCards version, so it gets the same error.
+    if (live.empty()) {
+      return range.size() == 1 ? EquityError::kDuplicateCard : EquityError::kEmptyRange;
+    }
+    hands.push_back(std::move(live));
+  }
+  return hands;
+}
+
+EquityError noValidDealError(std::span<const Range> players) {
+  const bool allKnown = std::all_of(players.begin(), players.end(),
+                                    [](const Range& range) { return range.size() == 1; });
+  return allKnown ? EquityError::kDuplicateCard : EquityError::kNoValidDeal;
 }
 
 Deck remainingDeck(CardMask used) {

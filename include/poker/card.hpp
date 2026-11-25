@@ -42,6 +42,9 @@ class Card {
   uint8_t index_ = 0;
 };
 
+// Parses a rank character ('2'-'9', T, J, Q, K, A, either case): 0 for '2' up to 12 for 'A'.
+std::optional<int> parseRank(char c);
+
 // A set of cards stored as a 52-bit mask (bit i set => card with index i present).
 using CardMask = uint64_t;
 

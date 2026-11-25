@@ -20,6 +20,12 @@ int suitFromChar(char ch) {
 
 }  // namespace
 
+std::optional<int> parseRank(char c) {
+  const int rank = rankFromChar(c);
+  if (rank < 0) return std::nullopt;
+  return rank;
+}
+
 std::optional<Card> Card::parse(std::string_view text) {
   if (text.size() != 2) return std::nullopt;
   const int rank = rankFromChar(text[0]);

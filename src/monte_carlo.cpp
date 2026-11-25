@@ -45,13 +45,50 @@ struct Totals {
 // position i swaps with a uniformly chosen position from i onwards, so the first `count` cards are
 // a uniformly random selection. The deck doesn't need resetting between trials: shuffling an
 // already-shuffled deck is still uniform.
-CardMask dealRandomBoard(detail::Deck& deck, size_t count, CardMask board, Rng& rng) {
+//
+// `excluded` holds deck cards that are in a player's hand this trial (players dealt from a range).
+// If one is picked, it's rejected and another card drawn, which keeps the choice uniform among the
+// cards that are really free. With nothing excluded (known hands), each card takes exactly one
+// random number.
+CardMask dealRandomBoard(detail::Deck& deck, size_t count, CardMask board, CardMask excluded,
+                         Rng& rng) {
   for (size_t i = 0; i < count; ++i) {
-    const auto j = i + static_cast<size_t>(uniformBelow(rng, deck.size - i));
-    std::swap(deck.cards[i], deck.cards[j]);
+    do {
+      const auto j = i + static_cast<size_t>(uniformBelow(rng, deck.size - i));
+      std::swap(deck.cards[i], deck.cards[j]);
+    } while (deck.cards[i] & excluded);
     board |= deck.cards[i];
   }
   return board;
+}
+
+// Deals each player in `sampled` one of their live hands, with no card used twice, by rejection
+// sampling: draw every hand independently, and if two hands collide (or a hand collides with a
+// known player's hand), throw the whole draw away and start again. Every valid combination of
+// hands is then exactly equally likely. (Stopping at the first collision instead of drawing the
+// rest changes nothing: that draw would be thrown away anyway.)
+//
+// The tempting shortcut, drawing each player's hand only from those that don't collide with the
+// hands already drawn, is biased: a hand that collides with most of the next player's hands is
+// still drawn as often as any other, although it belongs to fewer valid combinations. A test
+// checks this case. Returns the cards of the hands drawn.
+CardMask dealHands(const detail::LiveHands& hands, std::span<const size_t> sampled,
+                   CardMask knownHoleCards, Rng& rng, detail::Seats& seats) {
+  while (true) {
+    CardMask used = knownHoleCards;
+    bool collided = false;
+    for (const size_t player : sampled) {
+      const std::vector<CardMask>& live = hands[player];
+      const CardMask hand = live[static_cast<size_t>(uniformBelow(rng, live.size()))];
+      if (hand & used) {
+        collided = true;
+        break;
+      }
+      used |= hand;
+      seats.holes[player] = hand;
+    }
+    if (!collided) return used & ~knownHoleCards;
+  }
 }
 
 // Mean and standard error of `n` samples, given their sum and their sum of squares, where
@@ -89,13 +126,40 @@ Estimate MonteCarloResult::equity(size_t player) const {
 std::variant<MonteCarloResult, EquityError> monteCarloEquity(std::span<const HoleCards> players,
                                                              CardMask board, CardMask dead,
                                                              const MonteCarloOptions& options) {
+  // Validate known hands with their own, more specific errors, then treat each as a range of one.
   if (const auto error = detail::validateDeal(players, board, dead)) return *error;
-  if (options.trials == 0) return EquityError::kNoTrials;
+  return monteCarloEquity(detail::singleHandRanges(players), board, dead, options);
+}
 
-  const detail::Seats seats = detail::seatPlayers(players);
-  const detail::Deck startingDeck = detail::remainingDeck(board | dead | seats.allHoleCards);
-  const size_t missing = detail::missingBoardCards(board);
+std::variant<MonteCarloResult, EquityError> monteCarloEquity(std::span<const Range> players,
+                                                             CardMask board, CardMask dead,
+                                                             const MonteCarloOptions& options) {
+  const auto prepared = detail::liveHands(players, board, dead);
+  if (const auto* error = std::get_if<EquityError>(&prepared)) return *error;
+  if (options.trials == 0) return EquityError::kNoTrials;
+  const auto& hands = std::get<detail::LiveHands>(prepared);
+  // Rejection sampling only ever finishes if a valid deal exists, so check that there is one.
+  if (detail::forEachDeal(hands, [](const detail::Seats&) { return false; })) {
+    return detail::noValidDealError(players);
+  }
+
+  // Players with only one possible hand get it in every trial, and their cards stay out of the
+  // deck; the others are dealt a hand from their range in each trial.
   const size_t numPlayers = players.size();
+  detail::Seats knownSeats;
+  knownSeats.count = numPlayers;
+  CardMask knownHoleCards = 0;
+  std::vector<size_t> sampled;
+  for (size_t player = 0; player < numPlayers; ++player) {
+    if (hands[player].size() == 1) {
+      knownSeats.holes[player] = hands[player][0];
+      knownHoleCards |= hands[player][0];
+    } else {
+      sampled.push_back(player);
+    }
+  }
+  const detail::Deck startingDeck = detail::remainingDeck(board | dead | knownHoleCards);
+  const size_t missing = detail::missingBoardCards(board);
 
   const uint64_t numChunks =
       options.trials / kTrialsPerChunk + (options.trials % kTrialsPerChunk != 0 ? 1 : 0);
@@ -113,8 +177,10 @@ std::variant<MonteCarloResult, EquityError> monteCarloEquity(std::span<const Hol
         detail::Deck deck = startingDeck;
         const std::span<PlayerResult> counts(totals.players.data(), numPlayers);
         for (uint64_t trial = 0; trial < trials; ++trial) {
-          const detail::PotShares shares =
-              detail::showdown(dealRandomBoard(deck, missing, board, *rng), seats.holeMasks());
+          detail::Seats seats = knownSeats;
+          const CardMask dealtHoleCards = dealHands(hands, sampled, knownHoleCards, *rng, seats);
+          const CardMask fullBoard = dealRandomBoard(deck, missing, board, dealtHoleCards, *rng);
+          const detail::PotShares shares = detail::showdown(fullBoard, seats.holeMasks());
           detail::addToCounts(shares, counts);
           for (size_t i = 0; i < numPlayers; ++i) {
             totals.squaredPotUnits[i] += shares[i] * shares[i];
