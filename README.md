@@ -20,6 +20,8 @@ to WebAssembly, for the browser.
   gives the same numbers as the native one, to the last digit
 - ✅ A web page (plain HTML, CSS and JavaScript) that runs the calculator in a Web Worker, tested
   end to end in headless Chrome and deployed with GitHub Pages
+- ✅ Range and card pickers on the page: a 13×13 hand grid (click or drag to select, then fine-tune
+  single hands) that writes standard notation, and a 52-card picker for the board and dead cards
 
 ## Build
 
@@ -254,3 +256,6 @@ docs/            design notes (see docs/design.md)
 - [x] Multithreading
 - [x] Range parsing & range-vs-range equity
 - [x] CLI polish, WebAssembly build + web UI (version 1.0.0)
+- [x] Range and card pickers for the web page (version 1.1.0)
+- [ ] Next: a "top X%" slider for the range picker, from a hand ranking computed with this
+  calculator
