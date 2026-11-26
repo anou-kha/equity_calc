@@ -1,8 +1,9 @@
 # poker-equity
 
-A fast Texas Hold'em equity calculator written in modern C++20.
+A fast Texas Hold'em equity calculator written in modern C++20, for the command line and, compiled
+to WebAssembly, for the browser.
 
-> 🚧 Work in progress — see the roadmap below.
+**Try it in your browser: https://anou-kha.github.io/equity_calc/**
 
 ## Features
 - ✅ 7-card hand evaluator: a lookup-table evaluator (80–90 M hands/s) built from, and checked
@@ -14,8 +15,11 @@ A fast Texas Hold'em equity calculator written in modern C++20.
   bit-identical for any number of threads
 - ✅ Hand ranges (`QQ+, AKs, A5s-A2s, random`) and range-vs-range equity, exact or Monte Carlo;
   verified exactly against the Wizard of Odds' published hand-vs-random table
-- ✅ Command-line interface that picks exact or Monte Carlo automatically
-- Planned: WebAssembly build and web UI
+- ✅ Command-line interface that picks exact or Monte Carlo automatically, with `--json` output
+- ✅ WebAssembly build: the whole test suite also runs as WebAssembly, and the browser version
+  gives the same numbers as the native one, to the last digit
+- ✅ A web page (plain HTML, CSS and JavaScript) that runs the calculator in a Web Worker, tested
+  end to end in headless Chrome and deployed with GitHub Pages
 
 ## Build
 
@@ -50,6 +54,31 @@ of 2.1 billion showdowns that must reproduce the Wizard of Odds' published count
 ```bash
 ./build/poker_tests --gtest_also_run_disabled_tests --gtest_filter=*AllSevenCard*:FastEvaluator.*:*WizardOfOdds*
 ```
+
+### WebAssembly and the web page
+
+Install [Emscripten](https://emscripten.org/docs/getting_started/downloads.html) (CI uses 7.0.1)
+and activate it in your shell (`source ./emsdk_env.sh`, or `emsdk_env.ps1` in PowerShell). There
+are two WebAssembly builds:
+
+```bash
+# 1. The whole test suite, the CLI and the benchmarks as WebAssembly with threads, run by Node.js
+emcmake cmake -S . -B build-wasm-threads -DCMAKE_BUILD_TYPE=Release -DPOKER_WASM_THREADS=ON
+cmake --build build-wasm-threads --parallel
+ctest --test-dir build-wasm-threads --output-on-failure
+
+# 2. The browser module (single-threaded) and the web page, assembled in build-wasm/site
+emcmake cmake -S . -B build-wasm -DCMAKE_BUILD_TYPE=Release
+cmake --build build-wasm --parallel
+ctest --test-dir build-wasm --output-on-failure   # tests the page in headless Chrome if installed
+python -m http.server --directory build-wasm/site 8000   # then open http://localhost:8000
+```
+
+Browsers only run WebAssembly with threads on pages served with special headers, which static
+hosts like GitHub Pages can't send, so the browser module is single-threaded and runs in a Web
+Worker. On Windows, add `-G Ninja`: Visual Studio's generator can't drive Emscripten, and Visual
+Studio installs Ninja (a Developer PowerShell has it on PATH). See [docs/design.md](docs/design.md)
+for the details.
 
 ## Usage
 
@@ -117,6 +146,26 @@ The true equity is within the margin for 95% of seeds.
 - The work is shared between all hardware threads; `--threads <n>` limits it (`--threads 1` for a
   single thread). Small jobs like the flop above use one thread, because starting threads would
   cost more than it saves. The number of threads never changes the answer.
+- `poker_cli --help` lists everything, `--version` prints the version, and errors exit with
+  status 1.
+
+**JSON for scripts:** `--json` prints the result (or the error) as one line of JSON, the same JSON
+the web page receives, made by the same code:
+
+```
+$ poker_cli AsKs QhQd --board Js Ts 2h --json
+{"ok":true,"method":"exact","automatic":false,"board":"Js Ts 2h","dead":"","knownHands":true,
+ "showdowns":990,"deals":1,"seed":null,"threads":1,"milliseconds":0.2513,"players":[
+ {"range":"AsKs","hands":1,"win":0.5606060606060606,"tie":0,"equity":0.5606060606060606,"margin95":null},
+ {"range":"QhQd","hands":1,"win":0.4393939393939394,"tie":0,"equity":0.4393939393939394,"margin95":null}]}
+
+$ poker_cli AsKs "QQ+, AKx" --json
+{"ok":false,"field":"range","player":1,"message":"invalid range \"QQ+, AKx\" at \"AKx\": the last letter must be 's' (suited) or 'o' (offsuit)"}
+```
+
+(The first output is wrapped here for reading; it's a single line.) Fractions are written in the
+shortest form that reads back as exactly the same number, and `margin95` is only set for Monte
+Carlo.
 
 See [docs/design.md](docs/design.md) for how all of this works. Run `poker_bench` (from a Release
 build) for the benchmarks below.
@@ -167,13 +216,32 @@ because there are only 8 physical cores (two hardware threads on one core share 
 | Exact AA vs KK: 36 deals x 1,712,304 boards = 61.6M showdowns | 358 ms (172 M/s) | 261 ms (236 M/s) |
 | Monte Carlo `QQ+, AKs` vs any two cards, 10M trials | 136 ms | 116 ms |
 
+**WebAssembly vs native** (the same `poker_bench`, built with Emscripten 7.0.1 and run by Node.js
+24, against the MSVC build; medians of three runs, alternating between the two, in one session):
+
+| Benchmark | Native (MSVC) | WebAssembly | WebAssembly speed |
+|-----------|--------------:|------------:|------------------:|
+| Fast evaluator, 1M random 7-card hands | 63.9 M hands/s | 57.3 M hands/s | 90% |
+| Exact equity, AsAh vs KsKh preflop, 1 thread | 83 ms | 109 ms | 77% |
+| Monte Carlo, same spot, 1M trials, 1 thread | 99 ms | 140 ms | 70% |
+| Exact AA vs KK (61.6M showdowns), 16 threads | 329 ms | 402 ms | 82% |
+| Naive evaluator, 1M random 7-card hands | 7.4 M hands/s | 9.7 M hands/s | 131% |
+
+Both builds produce the same checksums and the same equity, to the last digit. The browser page runs
+single-threaded, at about 16 million heads-up showdowns a second, so it enumerates exactly up to 10
+million showdowns (under a second) and uses Monte Carlo beyond that. (The native figures in this
+table are lower than in the tables above, which were measured on another day: a laptop's speed
+varies with temperature and power settings, so only figures from the same session are compared.)
+
 ## Project layout
 
 ```
-include/poker/   public headers: card, evaluator, equity, monte_carlo, random, range (.hpp)
+include/poker/   public headers: calculator, card, evaluator, equity, monte_carlo, random, range
 src/             library + CLI (main.cpp)
-tests/           GoogleTest unit tests
+tests/           GoogleTest unit tests, and the CLI's end-to-end tests
 bench/           benchmarks
+wasm/            the JavaScript binding for the browser module, and its smoke test
+web/             the web page (HTML, CSS, JavaScript, Web Worker) and its tests
 docs/            design notes (see docs/design.md)
 ```
 
@@ -185,4 +253,4 @@ docs/            design notes (see docs/design.md)
 - [x] Fast evaluator + benchmarks
 - [x] Multithreading
 - [x] Range parsing & range-vs-range equity
-- [ ] WebAssembly build + web UI
+- [x] CLI polish, WebAssembly build + web UI (version 1.0.0)
