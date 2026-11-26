@@ -131,10 +131,38 @@ if(EMSCRIPTEN AND NOT POKER_WASM_THREADS)
   # Node only loads a .js file as an ES module inside a package marked "type": "module".
   file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/package.json" "{ \"type\": \"module\" }\n")
 
+  # The web page (web/) and the module together in <build>/site, ready to serve as static files.
+  set(POKER_WEB_FILES web/index.html web/style.css web/app.js web/worker.js)
+  list(TRANSFORM POKER_WEB_FILES PREPEND "${CMAKE_CURRENT_SOURCE_DIR}/")
+  add_custom_target(poker_site ALL
+    COMMAND ${CMAKE_COMMAND} -E make_directory site
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${POKER_WEB_FILES}
+      $<TARGET_FILE:poker_wasm> $<TARGET_FILE_DIR:poker_wasm>/poker_wasm.wasm site
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+    COMMENT "Assembling the web page in site/"
+    VERBATIM)
+  add_dependencies(poker_site poker_wasm)
+
   enable_testing()
   add_test(NAME wasm.BrowserModule
     COMMAND ${CMAKE_CROSSCOMPILING_EMULATOR} ${CMAKE_CURRENT_SOURCE_DIR}/wasm/smoke_test.mjs
       $<TARGET_FILE:poker_wasm>)
+  add_test(NAME wasm.WebWorker
+    COMMAND ${CMAKE_CROSSCOMPILING_EMULATOR} ${CMAKE_CURRENT_SOURCE_DIR}/web/worker_test.mjs
+      ${CMAKE_CURRENT_BINARY_DIR}/site)
+
+  # The page itself, in headless Chrome, if it's installed (it is on GitHub's Ubuntu runners).
+  find_program(POKER_CHROME
+    NAMES google-chrome google-chrome-stable chromium chromium-browser chrome
+    PATHS "C:/Program Files/Google/Chrome/Application"
+      "$ENV{LOCALAPPDATA}/Google/Chrome/Application")
+  if(POKER_CHROME)
+    add_test(NAME wasm.WebPage
+      COMMAND ${CMAKE_CROSSCOMPILING_EMULATOR} ${CMAKE_CURRENT_SOURCE_DIR}/web/browser_test.mjs
+        ${POKER_CHROME} ${CMAKE_CURRENT_BINARY_DIR}/site)
+  else()
+    message(STATUS "Chrome not found: the web page's browser test (wasm.WebPage) is skipped")
+  endif()
 endif()
 
 # ---- CLI -------------------------------------------------------------------

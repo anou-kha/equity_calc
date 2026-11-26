@@ -1,0 +1,373 @@
+/* Hold'em equity calculator: one small stylesheet, light and dark themes, no framework. */
+
+:root {
+  --background: #f6f7f9;
+  --surface: #ffffff;
+  --text: #1d2330;
+  --muted: #5b6475;
+  --border: #d5d9e0;
+  --accent: #1f6f50;
+  --accent-text: #ffffff;
+  --accent-soft: #d8eee4;
+  --error: #b3261e;
+  --red-suit: #c62828;
+  --focus: #2f6fdb;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #14171c;
+    --surface: #1d2129;
+    --text: #e6e9ef;
+    --muted: #a0a8b8;
+    --border: #353b47;
+    --accent: #4fbf8f;
+    --accent-text: #0d1a14;
+    --accent-soft: #23402f;
+    --error: #ff8a80;
+    --red-suit: #ff7b72;
+    --focus: #7aa7ff;
+    color-scheme: dark;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--background);
+  color: var(--text);
+  font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+header,
+main,
+footer {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 0 16px;
+}
+
+header {
+  padding-top: 32px;
+}
+
+h1 {
+  margin: 0 0 4px;
+  font-size: 1.75rem;
+}
+
+h2 {
+  font-size: 1.15rem;
+  margin: 0 0 12px;
+}
+
+.tagline,
+.hint,
+footer {
+  color: var(--muted);
+}
+
+.hint {
+  font-size: 0.85rem;
+  font-weight: normal;
+}
+
+code {
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 0.92em;
+}
+
+/* ---- Form ---- */
+
+form,
+#results,
+.examples,
+.notation {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px;
+  margin: 16px 0;
+}
+
+fieldset {
+  border: none;
+  margin: 0;
+  padding: 0;
+}
+
+legend {
+  font-weight: 600;
+  padding: 0;
+  margin-bottom: 8px;
+}
+
+label {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+input,
+select,
+button {
+  font: inherit;
+  color: inherit;
+}
+
+input,
+select {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--background);
+}
+
+input.range,
+#board,
+#dead {
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+
+input[aria-invalid="true"] {
+  border-color: var(--error);
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.player {
+  margin-bottom: 10px;
+}
+
+.player-input {
+  display: flex;
+  gap: 8px;
+}
+
+.card-fields,
+.monte-carlo-options {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.options {
+  margin-top: 16px;
+}
+
+.options summary,
+.notation summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.options fieldset {
+  margin-top: 12px;
+}
+
+.options fieldset label {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-weight: normal;
+}
+
+.options input[type="radio"] {
+  width: auto;
+}
+
+button {
+  padding: 8px 16px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--accent);
+  color: var(--accent-text);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+button.secondary {
+  background: transparent;
+  color: var(--text);
+  border-color: var(--border);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+button.remove {
+  padding: 4px 12px;
+  font-size: 1.2rem;
+  line-height: 1;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+#status {
+  color: var(--muted);
+}
+
+.error {
+  color: var(--error);
+  margin: 4px 0 0;
+  font-size: 0.9rem;
+}
+
+.error:empty {
+  display: none;
+}
+
+/* ---- Results ---- */
+
+.table-scroll {
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+th.number,
+td.number {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+td.range-text {
+  white-space: normal;
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 0.92em;
+}
+
+th.equity,
+td.equity {
+  min-width: 170px;
+}
+
+.equity-value {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.margin {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.bar {
+  height: 6px;
+  margin-top: 4px;
+  background: var(--accent-soft);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.bar-fill {
+  height: 100%;
+  background: var(--accent);
+}
+
+.board-line {
+  margin: 0 0 8px;
+}
+
+.card {
+  display: inline-block;
+  min-width: 2.2em;
+  margin-right: 4px;
+  padding: 1px 4px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--background);
+  text-align: center;
+  font-weight: 600;
+}
+
+.card.red {
+  color: var(--red-suit);
+}
+
+#summary {
+  color: var(--muted);
+  margin: 12px 0 0;
+}
+
+/* ---- Examples and notation ---- */
+
+#example-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.notation p {
+  margin: 12px 0;
+}
+
+footer {
+  padding-bottom: 32px;
+  font-size: 0.9rem;
+}
+
+footer a {
+  color: inherit;
+}
+
+@media (max-width: 560px) {
+  .card-fields,
+  .monte-carlo-options {
+    grid-template-columns: 1fr;
+  }
+
+  h1 {
+    font-size: 1.4rem;
+  }
+
+  /* Make the results fit a phone without scrolling sideways: the range already identifies each
+     row, so the Player and Hands columns go, and the margin wraps under the equity. */
+  .player-column,
+  .hands-column {
+    display: none;
+  }
+
+  th,
+  td {
+    padding: 6px 4px;
+  }
+
+  th.equity,
+  td.equity {
+    min-width: 0;
+    width: 40%;
+  }
+
+  .margin {
+    display: block;
+  }
+}

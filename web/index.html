@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hold'em Equity Calculator</title>
+  <meta name="description"
+        content="Texas Hold'em equity for hands and ranges, exact or by Monte Carlo simulation.">
+  <!-- A spade (♠) as the tab icon, inline so it needs no extra file. -->
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%E2%99%A0%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="style.css">
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+  <header>
+    <h1>Hold'em equity calculator</h1>
+    <p class="tagline">
+      All-in equity for known hands and ranges, exact or by Monte Carlo simulation. The calculator
+      is C++ compiled to WebAssembly, and runs entirely in your browser.
+    </p>
+  </header>
+
+  <main>
+    <noscript><p class="error">This calculator needs JavaScript and WebAssembly.</p></noscript>
+
+    <form id="form" novalidate>
+      <fieldset class="players">
+        <legend>Players</legend>
+        <div id="player-rows"></div>
+        <button type="button" id="add-player" class="secondary">Add player</button>
+      </fieldset>
+
+      <div class="card-fields">
+        <div class="field">
+          <label for="board">Board <span class="hint">0, 3, 4 or 5 cards</span></label>
+          <input id="board" name="board" placeholder="e.g. Js Ts 2h" autocomplete="off"
+                 spellcheck="false" aria-describedby="board-error">
+          <p class="error" id="board-error"></p>
+        </div>
+        <div class="field">
+          <label for="dead">Dead cards <span class="hint">cards nobody can have</span></label>
+          <input id="dead" name="dead" placeholder="e.g. 9c" autocomplete="off" spellcheck="false"
+                 aria-describedby="dead-error">
+          <p class="error" id="dead-error"></p>
+        </div>
+      </div>
+
+      <details class="options">
+        <summary>Method and options</summary>
+        <fieldset>
+          <legend>Method</legend>
+          <label><input type="radio" name="method" value="auto" checked> Automatic: exact when it
+            takes at most 10 million showdowns, otherwise Monte Carlo</label>
+          <label><input type="radio" name="method" value="exact"> Exact: every deal and board
+            (can take minutes for wide ranges preflop)</label>
+          <label><input type="radio" name="method" value="montecarlo"> Monte Carlo: random deals,
+            with a 95% margin of error</label>
+        </fieldset>
+        <div class="monte-carlo-options">
+          <div class="field">
+            <label for="trials">Monte Carlo trials</label>
+            <select id="trials" name="trials">
+              <option value="100000">100,000 (fastest)</option>
+              <option value="1000000" selected>1,000,000</option>
+              <option value="10000000">10,000,000 (most precise)</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="seed">Seed <span class="hint">same seed, same numbers</span></label>
+            <input id="seed" name="seed" type="number" min="0" step="1" value="1"
+                   aria-describedby="seed-error">
+            <p class="error" id="seed-error"></p>
+          </div>
+        </div>
+      </details>
+
+      <div class="actions">
+        <button type="submit" id="calculate" disabled>Calculate</button>
+        <button type="button" id="stop" class="secondary" hidden>Stop</button>
+        <span id="status" role="status">Loading the calculator…</span>
+      </div>
+      <p class="error" id="setup-error"></p>
+    </form>
+
+    <section id="results" aria-live="polite" hidden>
+      <h2>Results</h2>
+      <p class="board-line">Board: <span id="result-board"></span></p>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th scope="col" class="player-column">Player</th>
+              <th scope="col">Range</th>
+              <th scope="col" class="number hands-column">Hands</th>
+              <th scope="col" class="number">Win</th>
+              <th scope="col" class="number">Tie</th>
+              <th scope="col" class="equity">Equity</th>
+            </tr>
+          </thead>
+          <tbody id="result-rows"></tbody>
+        </table>
+      </div>
+      <p id="summary"></p>
+    </section>
+
+    <section class="examples">
+      <h2>Examples</h2>
+      <div id="example-buttons"></div>
+    </section>
+
+    <details class="notation">
+      <summary>Range notation</summary>
+      <p>Each player is a range of possible hands; a known hand like <code>AsKs</code> is a range
+        of one. Combine entries with commas. Hands that would use a board or dead card are left
+        out automatically.</p>
+      <table>
+        <thead>
+          <tr><th scope="col">Write</th><th scope="col">Means</th>
+            <th scope="col" class="number">Hands</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>QQ</code></td><td>a pair</td><td class="number">6</td></tr>
+          <tr><td><code>AKs</code> / <code>AKo</code> / <code>AK</code></td>
+            <td>suited / offsuit / both</td><td class="number">4 / 12 / 16</td></tr>
+          <tr><td><code>QQ+</code></td><td>QQ, KK, AA</td><td class="number">18</td></tr>
+          <tr><td><code>ATs+</code></td><td>ATs, AJs, AQs, AKs</td><td class="number">16</td></tr>
+          <tr><td><code>JJ-99</code></td><td>JJ, TT, 99</td><td class="number">18</td></tr>
+          <tr><td><code>A5s-A2s</code></td><td>A5s, A4s, A3s, A2s</td>
+            <td class="number">16</td></tr>
+          <tr><td><code>AhKh</code></td><td>one specific hand</td><td class="number">1</td></tr>
+          <tr><td><code>random</code> or <code>any</code></td><td>any two cards</td>
+            <td class="number">1,326</td></tr>
+        </tbody>
+      </table>
+      <p>Cards are a rank (<code>2</code>–<code>9</code>, <code>T</code>, <code>J</code>,
+        <code>Q</code>, <code>K</code>, <code>A</code>) and a suit (<code>c</code>, <code>d</code>,
+        <code>h</code>, <code>s</code>), with or without spaces: <code>Js Ts 2h</code> or
+        <code>JsTs2h</code>.</p>
+    </details>
+  </main>
+
+  <footer>
+    <p>
+      <span id="version">poker-equity</span> ·
+      <a href="https://github.com/anou-kha/equity_calc">Source code on GitHub</a> ·
+      The same C++ code as the command-line tool, giving the same numbers to the last digit.
+    </p>
+  </footer>
+
+  <template id="player-template">
+    <div class="player">
+      <label class="player-label"></label>
+      <div class="player-input">
+        <input class="range" autocomplete="off" spellcheck="false">
+        <button type="button" class="remove secondary" aria-label="Remove player">×</button>
+      </div>
+      <p class="error"></p>
+    </div>
+  </template>
+</body>
+</html>
