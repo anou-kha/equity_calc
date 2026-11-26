@@ -27,3 +27,6 @@ source of truth:
   Don't push or open pull requests: the owner does that.
 - On Windows (PowerShell 5.1, Visual Studio generator): `cmake --build build --config Release` and
   `ctest --test-dir build -C Release`; executables are in `build\Release\`.
+- **Build in your own folder** (for example `build-codex`), never in `build/`: that one belongs to
+  the owner and is set up for Visual Studio 2026, 64-bit. Don't reconfigure it with another
+  generator or platform, and don't edit files while another tool is working in this folder.
