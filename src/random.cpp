@@ -7,14 +7,13 @@ namespace poker {
 
 uint64_t uniformBelow(Rng& rng, uint64_t n) {
   assert(n > 0);
-  // The size of the incomplete block is 2^64 mod n. 2^64 itself doesn't fit in 64 bits, so compute
-  // (2^64 - n) mod n instead, which is the same number.
-  const uint64_t incomplete = (std::numeric_limits<uint64_t>::max() - n + 1) % n;
-  // Raw values in [0, incomplete) are rejected; the remaining 2^64 - incomplete values are an exact
-  // multiple of n, so every result is equally likely. For small n (like 52) a rejection almost
-  // never happens.
   uint64_t raw = rng();
-  while (raw < incomplete) raw = rng();
+  // The rejection threshold is 2^64 mod n, always below n. A draw >= n skips that division.
+  if (raw < n) {
+    // (2^64 - n) mod n gives the same threshold and fits in 64 bits.
+    const uint64_t incomplete = (std::numeric_limits<uint64_t>::max() - n + 1) % n;
+    while (raw < incomplete) raw = rng();
+  }
   return raw % n;
 }
 
