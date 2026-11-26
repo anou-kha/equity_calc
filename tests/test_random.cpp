@@ -22,6 +22,22 @@ TEST(UniformBelow, StaysInRange) {
   }
 }
 
+TEST(UniformBelow, MatchesSeededRejectionSequence) {
+  Rng rng(42);
+  Rng reference(42);
+  // The large bounds exercise both rejected draws and accepted draws below n.
+  for (const uint64_t n : {uint64_t{1}, uint64_t{52}, (uint64_t{1} << 63) + 1, uint64_t{3} << 62,
+                           std::numeric_limits<uint64_t>::max()}) {
+    const uint64_t threshold = (uint64_t{0} - n) % n;
+    for (int i = 0; i < 1000; ++i) {
+      uint64_t raw = reference();
+      while (raw < threshold) raw = reference();
+      ASSERT_EQ(uniformBelow(rng, n), raw % n) << "n = " << n << ", draw " << i;
+    }
+  }
+  EXPECT_EQ(rng(), reference());
+}
+
 // Pearson's chi-squared statistic: the sum of (observed - expected)^2 / expected over all values.
 // For truly uniform draws it averages (number of values - 1).
 double chiSquared(const std::vector<uint64_t>& counts, uint64_t draws) {
