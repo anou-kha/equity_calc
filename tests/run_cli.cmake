@@ -6,7 +6,8 @@
 #         -P run_cli.cmake
 #
 # The command is joined with | rather than CMake's list separator ;, which add_test() would split.
-# PATTERN is a CMake regular expression matched against stdout and stderr together.
+# It starts with Node.js in a WebAssembly build. PATTERN is a CMake regular expression matched
+# against stdout and stderr together.
 
 string(REPLACE "|" ";" command "${COMMAND}")
 execute_process(

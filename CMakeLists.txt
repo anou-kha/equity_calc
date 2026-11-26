@@ -59,6 +59,33 @@ if(POKER_TSAN)
   add_link_options(-fsanitize=thread)
 endif()
 
+# ---- WebAssembly (Emscripten) ----------------------------------------------
+# Configured with `emcmake cmake ...`, this file makes one of two WebAssembly builds:
+#  - By default, the browser module: the library plus its JavaScript binding (wasm/), without
+#    threads. Threaded WebAssembly needs SharedArrayBuffer even to run one thread, and browsers
+#    only allow that on pages served with special headers (COOP/COEP) that hosts like GitHub Pages
+#    can't send.
+#  - With POKER_WASM_THREADS=ON, the tests, CLI and benchmarks, with threads, run by Node.js
+#    (which allows SharedArrayBuffer), so the whole test suite, multithreading included, runs as
+#    WebAssembly.
+option(POKER_WASM_THREADS "Emscripten: build the tests, CLI and benchmarks, with threads" OFF)
+set(POKER_BUILD_PROGRAMS ON)  # the CLI, tests and benchmarks
+if(EMSCRIPTEN)
+  if(POKER_WASM_THREADS)
+    # Every object file must be compiled with -pthread (GoogleTest's too), so this comes before
+    # any target is created.
+    add_compile_options(-pthread)
+    # PROXY_TO_PTHREAD runs main() on a worker thread. A new thread only starts once Node's main
+    # thread gets back to its event loop, so a main() running there and waiting for its threads
+    # would wait forever. EXIT_RUNTIME makes main()'s return value the process's exit code.
+    add_link_options(-pthread -sPROXY_TO_PTHREAD -sEXIT_RUNTIME)
+  else()
+    set(POKER_BUILD_PROGRAMS OFF)  # they use threads
+  endif()
+elseif(POKER_WASM_THREADS)
+  message(FATAL_ERROR "POKER_WASM_THREADS is for Emscripten builds (emcmake cmake ...)")
+endif()
+
 function(poker_copy_asan_runtime target)
   foreach(dll IN LISTS POKER_ASAN_DLLS)
     if(EXISTS "${dll}")
@@ -89,13 +116,36 @@ target_compile_options(poker PRIVATE
 )
 target_compile_definitions(poker PRIVATE POKER_VERSION="${PROJECT_VERSION}")  # poker::version()
 
+# ---- Browser module (WebAssembly) ------------------------------------------
+if(EMSCRIPTEN AND NOT POKER_WASM_THREADS)
+  add_executable(poker_wasm wasm/bindings.cpp)
+  target_link_libraries(poker_wasm PRIVATE poker)
+  target_compile_options(poker_wasm PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
+  # -lembind: Emscripten's C++ <-> JavaScript bindings. MODULARIZE + EXPORT_ES6: the output,
+  # poker_wasm.js, is an ES module whose default export, createPokerModule(), loads poker_wasm.wasm
+  # and resolves to the API. FILESYSTEM=0 leaves out the emulated file system the library doesn't
+  # use.
+  target_link_options(poker_wasm PRIVATE
+    -lembind -sMODULARIZE -sEXPORT_ES6 -sEXPORT_NAME=createPokerModule
+    -sENVIRONMENT=web,worker,node -sALLOW_MEMORY_GROWTH -sFILESYSTEM=0)
+  # Node only loads a .js file as an ES module inside a package marked "type": "module".
+  file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/package.json" "{ \"type\": \"module\" }\n")
+
+  enable_testing()
+  add_test(NAME wasm.BrowserModule
+    COMMAND ${CMAKE_CROSSCOMPILING_EMULATOR} ${CMAKE_CURRENT_SOURCE_DIR}/wasm/smoke_test.mjs
+      $<TARGET_FILE:poker_wasm>)
+endif()
+
 # ---- CLI -------------------------------------------------------------------
-add_executable(poker_cli src/main.cpp)
-target_link_libraries(poker_cli PRIVATE poker)
-poker_copy_asan_runtime(poker_cli)
+if(POKER_BUILD_PROGRAMS)
+  add_executable(poker_cli src/main.cpp)
+  target_link_libraries(poker_cli PRIVATE poker)
+  poker_copy_asan_runtime(poker_cli)
+endif()
 
 # ---- Tests -----------------------------------------------------------------
-if(POKER_BUILD_TESTS)
+if(POKER_BUILD_TESTS AND POKER_BUILD_PROGRAMS)
   include(FetchContent)
   FetchContent_Declare(
     googletest
@@ -126,10 +176,11 @@ if(POKER_BUILD_TESTS)
   gtest_discover_tests(poker_tests)
 
   # End-to-end tests of the real poker_cli: run it with some arguments, then check the exit code
-  # and that the output matches a CMake regular expression (in which [.] is a literal dot).
+  # and that the output matches a CMake regular expression (in which [.] is a literal dot). In a
+  # WebAssembly build, the CLI is run by Node.js (the "cross-compiling emulator").
   #   poker_cli_test(<name> <expected exit code> <pattern> <arguments...>)
   function(poker_cli_test name exit_code pattern)
-    string(JOIN "|" command $<TARGET_FILE:poker_cli> ${ARGN})
+    string(JOIN "|" command ${CMAKE_CROSSCOMPILING_EMULATOR} $<TARGET_FILE:poker_cli> ${ARGN})
     add_test(NAME cli.${name}
       COMMAND ${CMAKE_COMMAND} -DCOMMAND=${command} -DEXIT_CODE=${exit_code}
         -DPATTERN=${pattern} -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_cli.cmake)
@@ -160,7 +211,7 @@ if(POKER_BUILD_TESTS)
 endif()
 
 # ---- Benchmarks ------------------------------------------------------------
-if(POKER_BUILD_BENCH)
+if(POKER_BUILD_BENCH AND POKER_BUILD_PROGRAMS)
   add_executable(poker_bench bench/bench_main.cpp)
   target_link_libraries(poker_bench PRIVATE poker)
   poker_copy_asan_runtime(poker_bench)
