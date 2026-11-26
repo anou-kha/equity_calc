@@ -161,12 +161,18 @@
       <span id="range-picker-count" class="picker-count" aria-live="polite"></span>
     </div>
     <p class="hint">Click or drag across hands to add or remove them: pairs on the diagonal,
-      suited hands above it, offsuit below.</p>
+      suited hands above it, offsuit below. The slider picks the best hands, ranked by their
+      equity against a random hand.</p>
     <p id="range-picker-note" class="error"></p>
     <div id="hand-grid" class="hand-grid"></div>
     <div class="suit-row">
       <span id="suit-row-label" class="suit-row-label"></span>
       <div id="suit-buttons" class="suit-buttons"></div>
+    </div>
+    <div class="top-row">
+      <label for="top-slider">Top hands</label>
+      <input type="range" id="top-slider" min="0" max="100" step="0.5" value="0">
+      <output id="top-value" for="top-slider">0%</output>
     </div>
     <div class="quick-buttons">
       <button type="button" class="secondary" data-quick="pairs">+ Pairs</button>

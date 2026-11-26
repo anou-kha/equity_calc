@@ -14,6 +14,7 @@
 #include "poker/card.hpp"
 #include "poker/equity.hpp"
 #include "poker/evaluator.hpp"
+#include "poker/hand_ranking.hpp"
 #include "poker/monte_carlo.hpp"
 #include "poker/range.hpp"
 
@@ -303,6 +304,21 @@ std::string cardsJson(std::string_view text) {
     appendNumber(out, uint64_t{static_cast<unsigned>(card.index())});
   }
   out += "]}";
+  return out;
+}
+
+std::string handRankingJson() {
+  std::string out = "[";
+  for (const RankedClass& handClass : handRanking()) {
+    if (out.back() != '[') out += ',';
+    out += '{';
+    appendKey(out, "name");
+    appendString(out, handClass.name);
+    appendKey(out, "equity");
+    appendNumber(out, handClass.equity());
+    out += '}';
+  }
+  out += ']';
   return out;
 }
 

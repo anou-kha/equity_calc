@@ -17,6 +17,7 @@
 
 #include "poker/calculator.hpp"
 #include "poker/equity.hpp"
+#include "poker/hand_ranking.hpp"
 #include "poker/monte_carlo.hpp"
 #include "poker/range.hpp"
 #include "test_helpers.hpp"
@@ -307,6 +308,26 @@ TEST(CalculatorRanges, UnreadableRangesGiveTheSameMessageAsCalculate) {
   EXPECT_EQ(fromCalculate.message,
             "invalid range \"QQ+, AKx\" at \"AKx\": the last letter must be 's' (suited) or 'o' "
             "(offsuit)");
+}
+
+TEST(CalculatorRanges, HandRankingJsonListsEveryClassBestFirst) {
+  const std::string json = poker::handRankingJson();
+  EXPECT_EQ(json.rfind(R"([{"name":"AA","equity":0.852)", 0), 0u) << json.substr(0, 40);
+  EXPECT_NE(json.find(R"({"name":"32o","equity":0.32)"), std::string::npos);
+  EXPECT_EQ(json.back(), ']');
+  size_t classes = 0;
+  for (size_t at = json.find("\"name\""); at != std::string::npos;
+       at = json.find("\"name\"", at + 1)) {
+    ++classes;
+  }
+  EXPECT_EQ(classes, 169u);
+}
+
+TEST(CalculatorRanges, TopRangesAreRangeJson) {
+  // AA then KK: 12 hands, 0.9%, the closest to 1% (QQ+ would be 18, 1.4%).
+  EXPECT_EQ(poker::rangeJson(poker::topRange(1)),
+            R"({"ok":true,"text":"KK+","hands":[[45,44],[46,44],[46,45],[47,44],[47,45],[47,46],)"
+            R"([49,48],[50,48],[50,49],[51,48],[51,49],[51,50]]})");
 }
 
 TEST(CalculatorCards, CardsJsonKeepsTheOrderAndNormalisesTheText) {

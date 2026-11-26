@@ -24,6 +24,10 @@
 // range in standard notation. parseCards(text) does the same for cards, for card pickers:
 // {"ok":true,"text":"Js Ts 2h","cards":[39,35,2]} (cardsJson()).
 //
+// topRange(percent) and handRanking() are for the range picker's "top X%" slider (see
+// hand_ranking.hpp): topRange(10) is the best 10% of hands in the same form as parseRange, and
+// handRanking() lists the 169 hand classes best first, [{"name":"AA","equity":0.852...},...].
+//
 // The module is single-threaded (see CMakeLists.txt), so a long calculation blocks the thread it
 // runs on: the web page runs it in a Web Worker, which keeps the page itself responsive. Range
 // pickers are quick, so the page also loads a second copy of the module for them.
@@ -39,6 +43,7 @@
 
 #include "poker/calculator.hpp"
 #include "poker/card.hpp"
+#include "poker/hand_ranking.hpp"
 #include "poker/range.hpp"
 
 namespace {
@@ -138,6 +143,17 @@ std::string parseRangeText(const std::string& text) { return poker::rangeJson(te
 // parseCards("Js Ts 2h")
 std::string parseCardsText(const std::string& text) { return poker::cardsJson(text); }
 
+// topRange(10): the best 10% of hands, as whole classes (hand_ranking.hpp), in parseRange's form.
+std::string topRangeJson(const val& percent) {
+  if (!percent.isNumber()) {
+    return requestError("topRange() takes a number, the percentage of hands, like 10");
+  }
+  return poker::rangeJson(poker::topRange(percent.as<double>()));
+}
+
+// handRanking(): [{"name":"AA","equity":0.852...},...], best first.
+std::string handRanking() { return poker::handRankingJson(); }
+
 // One card of a hand like [51, 47]: a whole number from 0 to 51.
 std::optional<int> cardIndex(const val& hand, unsigned position) {
   const val value = hand[position];
@@ -178,4 +194,6 @@ EMSCRIPTEN_BINDINGS(poker) {
   emscripten::function("parseRange", &parseRangeText);
   emscripten::function("formatRange", &rangeFromHands);
   emscripten::function("parseCards", &parseCardsText);
+  emscripten::function("topRange", &topRangeJson);
+  emscripten::function("handRanking", &handRanking);
 }
