@@ -119,5 +119,5 @@ jobs:
       - uses: actions/checkout@v4
       - name: Check formatting
         run: |
-          find include src tests bench wasm -name '*.hpp' -o -name '*.cpp' \
+          find include src tests bench tools wasm -name '*.hpp' -o -name '*.cpp' \
             | xargs clang-format --dry-run --Werror
