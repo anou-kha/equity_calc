@@ -84,6 +84,10 @@ also run both WebAssembly builds' tests.
 - The web page shows user input with `textContent`, never `innerHTML` (`web/browser_test.mjs`
   checks this). No frameworks or build step; new page files go into `POKER_WEB_FILES` in
   CMakeLists.txt.
+- Range and card notation is only ever read and written by the C++ (`parseRange`, `formatRange`,
+  `parseCards`): the page's pickers call them through a second copy of the module on the page's
+  thread (`web/page_module.js`), never a JavaScript reimplementation. `formatRange` must stay the
+  exact inverse of `parseRange` (the round-trip tests in `test_range.cpp`).
 - Add new source files to `CMakeLists.txt` explicitly (no globbing).
 - Small, focused commits with descriptive messages.
 
@@ -96,3 +100,5 @@ also run both WebAssembly builds' tests.
 6. ✅ Multithreaded Monte Carlo (and exact enumeration)
 7. ✅ Range parsing (`AKs, QQ+, A5s-A2s, 22+`) and range-vs-range equity
 8. ✅ CLI polish, then WebAssembly build + web frontend (version 1.0.0)
+9. ✅ Range and card pickers for the web page (version 1.1.0)
+10. Next: a "top X%" slider for the range picker, using a hand ranking computed with this calculator

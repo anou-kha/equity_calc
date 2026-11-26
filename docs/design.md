@@ -655,6 +655,31 @@ Each comma-separated entry is a specific hand (`AhKh`), a *hand class*, or a ran
 A neat completeness test: every pair plus every two-rank class (`22+, A2+, K2+, …, 32`) must equal
 `random`, because 78 pairs + 78 classes × 16 hands = 1,326.
 
+### Writing the notation: `formatRange`
+
+The range picker (section 10) needs the reverse: from a set of hands back to text. `formatRange`
+writes the shortest standard notation:
+
+- **Complete classes** (all 6, 4 or 12 hands) are grouped into runs of consecutive ranks. A run
+  that reaches the top is written with `+` (`QQ+`, `ATs+`), any other run with a dash (`JJ-99`,
+  `A5s-A2s`). When the suited and offsuit classes of a high card match exactly, one entry without
+  `s`/`o` covers both (`AT+`).
+- **Other hands** are listed one by one (`AsKs, AhKh`), so nothing is ever lost.
+- **All 1,326 hands** are `random`, and the order is fixed (pairs, then by high card, suited before
+  offsuit, then single hands), so equal ranges always give the same text.
+
+It's tested by its defining property, `parseRange(formatRange(r)) == r`, on every single hand, every
+class and 2,000 seeded random mixtures, and by checking that writing the result again gives the
+same text. A planted bug (a run one short of the top written with `+`) fails both. Writing a
+function together with its inverse and testing the round trip checks thousands of cases without
+working out any expected answers by hand.
+
+Writing those tests turned up a classic C++ trap, in the test itself:
+`for (auto hand : range("random").combos())` reads freed memory. `combos()` returns a view
+(`std::span`) into the range, and the temporary range is destroyed before the loop runs. (C++23
+keeps such temporaries alive for the loop.) MSVC's Release build saw 525 garbage hands instead of
+1,325; storing the range in a variable first fixed it.
+
 ### Exact range-vs-range equity
 
 Exact enumeration now runs over every **deal** (one hand from each player's range, no card used
@@ -823,13 +848,13 @@ engine (V8) compiles it to machine code. The naive evaluator is even 30% faster 
 isn't a WebAssembly advantage: Emscripten uses Clang (LLVM), which optimises that code better than
 MSVC does.
 
-The module is 173 KB of WebAssembly plus 27 KB of JavaScript. The fast evaluator's 330 KB of lookup
+The module is 186 KB of WebAssembly plus 27 KB of JavaScript. The fast evaluator's 330 KB of lookup
 tables aren't downloaded: the browser builds them from the naive evaluator when it starts, in
 about 9 ms.
 
 ## 10. The web page
 
-Plain HTML, CSS and JavaScript (`web/`), with no framework and no build step: about 230 KB in all,
+Plain HTML, CSS and JavaScript (`web/`), with no framework and no build step: about 265 KB in all,
 module included.
 
 - **A Web Worker:** a calculation blocks the thread it runs on until it finishes, and on the page's
@@ -849,6 +874,40 @@ module included.
 - **Phones:** at narrow widths the Player and Hands columns are hidden and the margin wraps, so the
   equity column stays visible.
 
+### Range and card pickers
+
+Each player's range, the board and the dead cards have a **Pick** button that opens a panel:
+
+- **The range picker** (`web/range_picker.js`) is the 13×13 grid of hand classes every range tool
+  uses: pairs on the diagonal, suited hands above it, offsuit below. Clicking or dragging across
+  cells adds or removes whole classes, and buttons below the grid toggle the single hands of the
+  last class touched (A♠K♠, A♥K♥, …). A partly chosen class shows the chosen fraction as a bar.
+- **The card picker** (`web/card_picker.js`) shows the 52 cards in four rows and keeps them in the
+  order clicked. Cards held by a known hand, or already in the other field, are disabled with the
+  reason, and the board stops at five.
+
+How they're built:
+
+- **The C++ stays the only source of notation.** The pickers never parse or write range or card
+  text themselves: they call `parseRange`, `formatRange` and `parseCards` in the module, so the
+  picker and the calculator can't disagree about what a range means. For that, the page loads a
+  second copy of the module on its own thread (`web/page_module.js`), separate from the worker's.
+  It answers in well under a millisecond, even while the worker is busy.
+- **One source of truth for the selection:** a single `Set` of hands, numbered as in the C++ code.
+  After every change, everything on screen (the cell shading, the single-hand buttons, the text,
+  the count) is redrawn from it, so the views can't drift apart. Frameworks like React are built on
+  the same idea.
+- **Dragging, with mouse, pen or finger:** on a touchscreen all of a finger's pointer events go to
+  the element it first touched, so "the pointer entered this cell" never fires for the others.
+  Instead the picker asks `document.elementFromPoint(x, y)` which cell is under the pointer, which
+  works for every kind of pointer. The first cell decides whether the drag adds or removes.
+- **The keyboard for free:** the cells are real `<button>`s, so Tab, Enter and Space work. A
+  keyboard "click" has `event.detail === 0`, while a mouse click has 1 or more and was already
+  handled on `pointerdown`, which is how a cell isn't toggled twice.
+- **`<dialog>`:** the browser's own dialog element traps the focus inside the panel, closes on
+  Escape and dims the page, all of which hand-made pop-ups often get wrong. The panel takes the
+  focus itself when it opens, so the first cell doesn't look selected.
+
 ### How it's tested
 
 - `web/worker_test.mjs` runs `worker.js` in Node.js with a stand-in for the worker's global scope and
@@ -858,12 +917,17 @@ module included.
   types, clicks and reads the page like a user would. It checks results, errors, Stop, the player
   limit, the phone layout, that markup in an input never becomes elements, and that the browser
   console shows no errors or warnings. It runs in CI on every push.
+- For the pickers it drags with **real mouse events**, sent through the DevTools protocol (press on
+  one cell, move over others, release), so the page's pointer code runs exactly as it does for a
+  person; calling `.click()` would skip it. It also checks the single-hand buttons, keyboard
+  toggling, Use and Cancel, unreadable input, the disabled cards and the 5-card limit, and that both
+  panels fit a phone. Switching drag painting off makes it fail.
 - These tests found three real problems while the page was being built. Exact enumeration of three
   random hands crashed the module, a bug in the library since step 7 that the CLI had too (section
   7, "A limit on deals"). The results table hid its Equity column on phones. And the equity and its
   margin had no real space between them (it was only CSS margin), so screen readers and copy-paste
-  ran them together. Replacing `textContent` with
-  `innerHTML` makes the test fail at once, with "markup became an element".
+  ran them together. Replacing `textContent` with `innerHTML` makes the test fail at once, with
+  "markup became an element".
 
 ### Deployment
 
@@ -1025,3 +1089,19 @@ deals the same boards, and prints the same numbers, on every platform.
   the CLI had too. It now counts them first and refuses over 4.2 million with a clear error. On
   phones, the results table hid its most important column. And the equity and its margin had no
   real space between them (only CSS margin), so screen readers ran them together.
+- **How do you test a formatter?** With its inverse: `parseRange(formatRange(r)) == r` for every
+  single hand, every hand class and thousands of seeded random ranges, plus "writing it twice gives
+  the same text". That checks both functions at once without hand-written expected answers, and a
+  planted bug fails it.
+- **Why doesn't the page parse ranges in JavaScript?** Then there would be two parsers that could
+  disagree. The picker calls the C++ `parseRange` and `formatRange` in a second copy of the
+  WebAssembly module on the page's thread, which answers in well under a millisecond, even while
+  the worker is busy calculating.
+- **How does drag-to-select work on a touchscreen?** All of a finger's pointer events go to the
+  element it first touched, so the picker asks `document.elementFromPoint` which cell is under the
+  finger. The same code serves mouse, pen and touch, and the test drives it with real mouse events
+  through Chrome's DevTools protocol.
+- **Tell me about a C++ lifetime bug.** `for (auto hand : range("random").combos())`: `combos()` is a
+  view into a temporary that dies before the loop body runs (until C++23), so the loop reads freed
+  memory. A test of mine did that; it showed up as 525 garbage hands, and the fix is to store the
+  range in a variable first.

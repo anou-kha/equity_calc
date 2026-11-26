@@ -4,6 +4,10 @@
 // Everything typed into the page is shown with textContent, never innerHTML, so input like
 // "<img onerror=...>" is displayed as text and can't add markup or scripts to the page.
 
+import { openCardPicker } from "./card_picker.js";
+import { pageModule } from "./page_module.js";
+import { openRangePicker } from "./range_picker.js";
+
 const MIN_PLAYERS = 2;
 const MAX_PLAYERS = 9;
 
@@ -51,7 +55,17 @@ function playerRows() {
 
 function addPlayer(range = "") {
   const row = playerTemplate.content.firstElementChild.cloneNode(true);
-  row.querySelector(".range").value = range;
+  const input = row.querySelector(".range");
+  input.value = range;
+  row.querySelector(".pick").addEventListener("click", () => {
+    openRangePicker({
+      title: `${row.querySelector(".player-label").textContent}'s range`,
+      text: input.value,
+      use: (text) => {
+        input.value = text;
+      },
+    });
+  });
   row.querySelector(".remove").addEventListener("click", () => {
     row.remove();
     renumberPlayers();
@@ -82,6 +96,7 @@ function renumberPlayers() {
     const label = row.querySelector(".player-label");
     label.htmlFor = id;
     label.textContent = `Player ${i + 1}`;
+    row.querySelector(".pick").setAttribute("aria-label", `Pick player ${i + 1}'s range`);
     const remove = row.querySelector(".remove");
     remove.setAttribute("aria-label", `Remove player ${i + 1}`);
     remove.hidden = rows.length <= MIN_PLAYERS;
@@ -90,6 +105,43 @@ function renumberPlayers() {
 }
 
 addPlayerButton.addEventListener("click", () => addPlayer().querySelector(".range").focus());
+
+// ---- Card pickers -------------------------------------------------------------------------------
+
+// The cards the board (or the dead cards) can't use, with the reason: both cards of every player
+// holding a single known hand, and the cards already in the other field.
+async function takenCards(forBoard) {
+  const poker = await pageModule();
+  const taken = new Map();
+  playerRows().forEach((row, i) => {
+    const range = JSON.parse(poker.parseRange(row.querySelector(".range").value));
+    if (range.ok && range.hands.length === 1) {
+      for (const card of range.hands[0]) taken.set(card, `held by Player ${i + 1}`);
+    }
+  });
+  const other = JSON.parse(poker.parseCards((forBoard ? deadInput : boardInput).value));
+  if (other.ok) {
+    const reason = forBoard ? "in the dead cards" : "on the board";
+    for (const card of other.cards) taken.set(card, reason);
+  }
+  return taken;
+}
+
+async function pickCards(forBoard) {
+  const input = forBoard ? boardInput : deadInput;
+  openCardPicker({
+    title: forBoard ? "Board" : "Dead cards",
+    text: input.value,
+    board: forBoard,
+    taken: await takenCards(forBoard),
+    use: (text) => {
+      input.value = text;
+    },
+  });
+}
+
+byId("pick-board").addEventListener("click", () => pickCards(true));
+byId("pick-dead").addEventListener("click", () => pickCards(false));
 
 function selectedMethod() {
   return form.elements.method.value;

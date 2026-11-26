@@ -33,14 +33,22 @@
       <div class="card-fields">
         <div class="field">
           <label for="board">Board <span class="hint">0, 3, 4 or 5 cards</span></label>
-          <input id="board" name="board" placeholder="e.g. Js Ts 2h" autocomplete="off"
-                 spellcheck="false" aria-describedby="board-error">
+          <div class="input-row">
+            <input id="board" name="board" placeholder="e.g. Js Ts 2h" autocomplete="off"
+                   spellcheck="false" aria-describedby="board-error">
+            <button type="button" id="pick-board" class="secondary"
+                    aria-label="Pick the board cards">Pick</button>
+          </div>
           <p class="error" id="board-error"></p>
         </div>
         <div class="field">
           <label for="dead">Dead cards <span class="hint">cards nobody can have</span></label>
-          <input id="dead" name="dead" placeholder="e.g. 9c" autocomplete="off" spellcheck="false"
-                 aria-describedby="dead-error">
+          <div class="input-row">
+            <input id="dead" name="dead" placeholder="e.g. 9c" autocomplete="off"
+                   spellcheck="false" aria-describedby="dead-error">
+            <button type="button" id="pick-dead" class="secondary"
+                    aria-label="Pick the dead cards">Pick</button>
+          </div>
           <p class="error" id="dead-error"></p>
         </div>
       </div>
@@ -147,11 +155,55 @@
     </p>
   </footer>
 
+  <dialog id="range-picker" class="picker" aria-labelledby="range-picker-title" tabindex="-1">
+    <div class="picker-header">
+      <h2 id="range-picker-title">Range</h2>
+      <span id="range-picker-count" class="picker-count" aria-live="polite"></span>
+    </div>
+    <p class="hint">Click or drag across hands to add or remove them: pairs on the diagonal,
+      suited hands above it, offsuit below.</p>
+    <p id="range-picker-note" class="error"></p>
+    <div id="hand-grid" class="hand-grid"></div>
+    <div class="suit-row">
+      <span id="suit-row-label" class="suit-row-label"></span>
+      <div id="suit-buttons" class="suit-buttons"></div>
+    </div>
+    <div class="quick-buttons">
+      <button type="button" class="secondary" data-quick="pairs">+ Pairs</button>
+      <button type="button" class="secondary" data-quick="broadway">+ Broadway</button>
+      <button type="button" class="secondary" data-quick="suited-aces">+ Suited aces</button>
+      <button type="button" class="secondary" data-quick="clear">Clear</button>
+    </div>
+    <p class="picker-text"><code id="range-picker-text"></code></p>
+    <div class="actions">
+      <button type="button" id="range-picker-use">Use range</button>
+      <button type="button" id="range-picker-cancel" class="secondary">Cancel</button>
+    </div>
+  </dialog>
+
+  <dialog id="card-picker" class="picker" aria-labelledby="card-picker-title" tabindex="-1">
+    <div class="picker-header">
+      <h2 id="card-picker-title">Cards</h2>
+      <span id="card-picker-count" class="picker-count" aria-live="polite"></span>
+    </div>
+    <p class="hint">Click cards to add or remove them.</p>
+    <p id="card-picker-note" class="error"></p>
+    <div id="card-grid" class="card-grid"></div>
+    <p id="card-picker-unavailable" class="hint"></p>
+    <p class="picker-text"><code id="card-picker-text"></code></p>
+    <div class="actions">
+      <button type="button" id="card-picker-use">Use cards</button>
+      <button type="button" id="card-picker-cancel" class="secondary">Cancel</button>
+      <button type="button" id="card-picker-clear" class="secondary">Clear</button>
+    </div>
+  </dialog>
+
   <template id="player-template">
     <div class="player">
       <label class="player-label"></label>
-      <div class="player-input">
+      <div class="input-row">
         <input class="range" autocomplete="off" spellcheck="false">
+        <button type="button" class="pick secondary">Pick</button>
         <button type="button" class="remove secondary" aria-label="Remove player">×</button>
       </div>
       <p class="error"></p>

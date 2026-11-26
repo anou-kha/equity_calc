@@ -11,6 +11,8 @@
 #include <variant>
 #include <vector>
 
+#include "poker/range.hpp"
+
 namespace poker {
 
 // The project version from CMakeLists.txt, e.g. "1.0.0".
@@ -76,5 +78,17 @@ std::variant<CalculationReport, CalculationError> calculate(const CalculationReq
 // JSON for programs: {"ok":true, ...} for a report and {"ok":false, ...} for an error.
 std::string toJson(const CalculationReport& report);
 std::string toJson(const CalculationError& error);
+
+// For range pickers: a range as JSON, {"ok":true,"text":"QQ+, AKs","hands":[[51,47],...]}, with
+// its standard notation (formatRange) and every hand as its two card indices, higher first, in
+// canonical order. Text that can't be read gives {"ok":false,"message":"invalid range ..."}, the
+// same message calculate() gives.
+std::string rangeJson(std::string_view text);
+std::string rangeJson(const Range& range);
+
+// For card pickers: cards like "jsTs2h" as JSON, {"ok":true,"text":"Js Ts 2h","cards":[39,35,2]},
+// in the order given, or {"ok":false,"message":"invalid cards: ..."} if the text can't be read (a
+// card given twice included). No cards at all is fine.
+std::string cardsJson(std::string_view text);
 
 }  // namespace poker

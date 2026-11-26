@@ -251,6 +251,161 @@ async function runTests() {
   assert.equal(await page("document.querySelectorAll('.player').length"), 9);
   assert.equal(await page(`${el("add-player")}.disabled`), true);
 
+  // ---- The range picker ----
+
+  // A cell of the hand grid, as a CSS selector, by its name ("AKs").
+  const cell = async (name) => {
+    const index = await page(`[...document.querySelectorAll('.hand-cell')]
+        .findIndex((cell) => cell.textContent === ${JSON.stringify(name)})`);
+    assert.ok(index >= 0, `no cell ${name}`);
+    return `.hand-cell[data-index="${index}"]`;
+  };
+  const cellState = async (name) =>
+    page(`document.querySelector('${await cell(name)}').getAttribute('aria-pressed')`);
+  const centre = (selector) => page(`(() => {
+      const box = document.querySelector('${selector}').getBoundingClientRect();
+      return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+    })()`);
+  // Real mouse input through Chrome: press on the first cell, move over the others, release.
+  const drag = async (names) => {
+    const points = [];
+    for (const name of names) points.push(await centre(await cell(name)));
+    const mouse = (type, { x, y }, pressed) => send("Input.dispatchMouseEvent", {
+      type, x, y, button: type === "mouseMoved" ? "none" : "left", buttons: pressed ? 1 : 0,
+      clickCount: 1,
+    });
+    await mouse("mousePressed", points[0], true);
+    for (const point of points.slice(1)) await mouse("mouseMoved", point, true);
+    await mouse("mouseReleased", points[points.length - 1], false);
+  };
+  const quick = (pick) => page(`document.querySelector('[data-quick="${pick}"]').click()`);
+  const suitButtons = () => page(`[...document.querySelectorAll('#suit-buttons button')]
+      .map((button) => button.getAttribute('aria-label') +
+                       (button.getAttribute('aria-pressed') === 'true' ? '*' : ''))`);
+  const pickerText = () => text("range-picker-text");
+  const pickerOpen = `${el("range-picker")}.open`;
+
+  // Opening shows the player's current range: AsKs is one of the four AKs hands.
+  await page("document.querySelector('.player .pick').click()");
+  await waitFor(pickerOpen, "the range picker");
+  assert.equal(await text("range-picker-title"), "Player 1's range");
+  assert.equal(await text("range-picker-count"), "1 hand · 0.1%");
+  assert.equal(await pickerText(), "AsKs");
+  assert.equal(await cellState("AKs"), "mixed");
+  assert.equal(await text("suit-row-label"), "Single hands of AKs:");
+  assert.deepEqual(await suitButtons(), ["AcKc", "AdKd", "AhKh", "AsKs*"]);
+  await screenshot("picker-desktop.png");
+
+  // Dragging across cells adds whole classes; a drag that starts on a chosen cell removes.
+  await quick("clear");
+  await drag(["AKs", "AQs", "AJs"]);
+  assert.equal(await pickerText(), "AJs+");
+  assert.equal(await text("range-picker-count"), "12 hands · 0.9%");
+  await drag(["AQs", "AJs"]);
+  assert.equal(await pickerText(), "AKs");
+  assert.equal(await cellState("AQs"), "false");
+
+  // The suit buttons show the class touched last (AJs) and toggle single hands.
+  assert.equal(await text("suit-row-label"), "Single hands of AJs:");
+  await page(`[...document.querySelectorAll('#suit-buttons button')]
+      .find((button) => button.getAttribute('aria-label') === 'AhJh').click()`);
+  assert.equal(await pickerText(), "AKs, AhJh");
+  assert.equal(await cellState("AJs"), "mixed");
+
+  // Keyboard: Enter or Space on a cell is a click with event.detail 0, which toggles it.
+  await page(`document.querySelector('${await cell("KK")}').click()`);
+  assert.equal(await pickerText(), "KK, AKs, AhJh");
+  await quick("pairs");
+  assert.equal(await pickerText(), "22+, AKs, AhJh");
+
+  // "Use range" writes the text into the player's box.
+  await click("range-picker-use");
+  assert.equal(await page(pickerOpen), false);
+  assert.equal(await page(`${el("player-1")}.value`), "22+, AKs, AhJh");
+
+  // Opening again shows that range; Cancel leaves the box alone.
+  await page("document.querySelector('.player .pick').click()");
+  await waitFor(pickerOpen, "the range picker again");
+  assert.equal(await text("range-picker-count"), "83 hands · 6.3%");
+  await quick("clear");
+  await click("range-picker-cancel");
+  assert.equal(await page(`${el("player-1")}.value`), "22+, AKs, AhJh");
+
+  // A range that can't be read: the picker says why and starts empty.
+  await type("player-2", "QQ+, AKx");
+  await page("document.querySelectorAll('.player .pick')[1].click()");
+  await waitFor(pickerOpen, "the picker for player 2");
+  assert.match(await text("range-picker-note"), /couldn't be read: invalid range .* at "AKx"/);
+  assert.equal(await text("range-picker-count"), "0 hands · 0.0%");
+  await click("range-picker-cancel");
+
+  // ---- The card picker ----
+
+  const cardSelector = (card) => `.card-cell[aria-label="${card}"]`;
+  const clickCard = (card) => page(`document.querySelector('${cardSelector(card)}').click()`);
+  const cardState = (card) => page(`(() => {
+      const button = document.querySelector('${cardSelector(card)}');
+      return button.disabled ? 'disabled' : button.getAttribute('aria-pressed');
+    })()`);
+  const cardPickerOpen = `${el("card-picker")}.open`;
+
+  // Cards held by known hands, or dead, can't go on the board.
+  await type("player-1", "AsKs");
+  await type("player-2", "QhQd");
+  await type("board", "");
+  await type("dead", "9c");
+  await click("pick-board");
+  await waitFor(cardPickerOpen, "the board picker");
+  assert.equal(await text("card-picker-title"), "Board");
+  assert.equal(await page("document.activeElement.id"), "card-picker");  // no card looks focused
+  for (const card of ["As", "Ks", "Qh", "Qd", "9c"]) {
+    assert.equal(await cardState(card), "disabled", card);
+  }
+  assert.equal(await text("card-picker-unavailable"),
+               "Greyed-out cards are held by Player 1, held by Player 2 and in the dead cards.");
+
+  // Cards keep the order they were clicked in; a board of 1 or 2 cards gets a reminder.
+  await clickCard("Js");
+  assert.equal(await text("card-picker-note"), "A board has 0, 3, 4 or 5 cards.");
+  await clickCard("Ts");
+  await clickCard("2h");
+  assert.equal(await text("card-picker-text"), "Js Ts 2h");
+  assert.equal(await text("card-picker-count"), "3 of 5 cards");
+  assert.equal(await text("card-picker-note"), "");
+  assert.equal(await cardState("Js"), "true");
+  await screenshot("card-picker-desktop.png");
+
+  // At five cards the rest are disabled; removing one frees them again.
+  await clickCard("3c");
+  await clickCard("4d");
+  assert.equal(await cardState("5h"), "disabled");
+  await clickCard("4d");
+  await clickCard("3c");
+  assert.equal(await cardState("5h"), "false");
+  await click("card-picker-use");
+  assert.equal(await page(cardPickerOpen), false);
+  assert.equal(await page(`${el("board")}.value`), "Js Ts 2h");
+
+  // The dead-card picker greys out the board instead; Cancel leaves the box alone.
+  await click("pick-dead");
+  await waitFor(cardPickerOpen, "the dead-card picker");
+  assert.equal(await text("card-picker-title"), "Dead cards");
+  assert.equal(await cardState("Js"), "disabled");
+  assert.equal(await cardState("9c"), "true");
+  await clickCard("8c");
+  assert.equal(await text("card-picker-text"), "9c 8c");
+  assert.equal(await text("card-picker-count"), "2 cards");
+  await click("card-picker-cancel");
+  assert.equal(await page(`${el("dead")}.value`), "9c");
+
+  // Cards that can't be read: the picker says why and starts empty.
+  await type("board", "Js Zz");
+  await click("pick-board");
+  await waitFor(cardPickerOpen, "the board picker again");
+  assert.match(await text("card-picker-note"), /couldn't be read: invalid cards: Js Zz/);
+  assert.equal(await text("card-picker-count"), "0 of 5 cards");
+  await click("card-picker-cancel");
+
   // At phone width, nothing is wider than the screen, the results table included.
   await open("?p=QQ%2B%2C+AKs&p=random&p=random");
   await waitForResults("three players");
@@ -263,6 +418,30 @@ async function runTests() {
   await screenshot("phone-light.png");
   await colorScheme("dark");
   await screenshot("phone-dark.png");
+
+  // The picker fits a phone too, with cells big enough to tap.
+  await page("document.querySelector('.player .pick').click()");
+  await waitFor(pickerOpen, "the range picker on a phone");
+  const fits = await page(`(() => {
+      const picker = document.getElementById('range-picker');
+      const cell = document.querySelector('.hand-cell').getBoundingClientRect();
+      const inside = picker.getBoundingClientRect().right <= window.innerWidth;
+      return { fits: inside && picker.scrollWidth <= picker.clientWidth, cellWidth: cell.width };
+    })()`);
+  assert.equal(fits.fits, true, "the picker is wider than the screen");
+  assert.ok(fits.cellWidth >= 22, `cells are only ${fits.cellWidth}px wide`);
+  await screenshot("picker-phone-dark.png");
+  await click("range-picker-cancel");
+
+  await click("pick-board");
+  await waitFor(cardPickerOpen, "the board picker on a phone");
+  assert.equal(await page(`(() => {
+      const picker = document.getElementById('card-picker');
+      return picker.getBoundingClientRect().right <= window.innerWidth &&
+             picker.scrollWidth <= picker.clientWidth;
+    })()`), true, "the card picker is wider than the screen");
+  await screenshot("card-picker-phone-dark.png");
+  await click("card-picker-cancel");
 
   assert.deepEqual(consoleProblems, [], "errors or warnings in the browser console");
   socket.close();

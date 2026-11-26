@@ -7,10 +7,13 @@
 #include "poker/range.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <cctype>
 #include <optional>
+#include <string>
 #include <utility>
+#include <vector>
 
 namespace poker {
 namespace {
@@ -44,16 +47,31 @@ struct HandClass {
   bool isPair() const { return high == low; }
 };
 
-// Adds every hand in a class: 6 for a pair, 4 suited, 12 offsuit, 16 for both.
-void addClass(Range& range, int high, int low, Suitedness suitedness) {
+// Calls visit(hand) for every hand in a class: 6 for a pair, 4 suited, 12 offsuit, 16 for both.
+// visit returns false to stop early, and then so does this function.
+template <typename Visit>
+bool forEachHandInClass(int high, int low, Suitedness suitedness, const Visit& visit) {
   for (int suit1 = 0; suit1 < kNumSuits; ++suit1) {
     for (int suit2 = 0; suit2 < kNumSuits; ++suit2) {
       if (high == low && suit2 <= suit1) continue;  // a pair: each pair of suits once
       if (suitedness == Suitedness::kSuited && suit1 != suit2) continue;
       if (suitedness == Suitedness::kOffsuit && suit1 == suit2) continue;
-      range.add({Card(high, suit1), Card(low, suit2)});
+      if (!visit(HoleCards{Card(high, suit1), Card(low, suit2)})) return false;
     }
   }
+  return true;
+}
+
+void addClass(Range& range, int high, int low, Suitedness suitedness) {
+  forEachHandInClass(high, low, suitedness, [&](HoleCards hand) {
+    range.add(hand);
+    return true;
+  });
+}
+
+bool hasWholeClass(const Range& range, int high, int low, Suitedness suitedness) {
+  return forEachHandInClass(high, low, suitedness,
+                            [&](HoleCards hand) { return range.contains(hand); });
 }
 
 void addAllHands(Range& range) {
@@ -169,6 +187,40 @@ std::optional<std::string_view> addEntry(Range& range, std::string_view entry) {
   return std::nullopt;
 }
 
+// ---- Writing ranges -----------------------------------------------------------------------------
+
+constexpr std::string_view kRankChars = "23456789TJQKA";
+
+std::string className(int high, int low, Suitedness suitedness) {
+  std::string name{kRankChars[static_cast<size_t>(high)], kRankChars[static_cast<size_t>(low)]};
+  if (suitedness == Suitedness::kSuited) name += 's';
+  if (suitedness == Suitedness::kOffsuit) name += 'o';
+  return name;
+}
+
+// Which ranks (pairs) or kickers (with a given high card) form complete classes in a range.
+using RankFlags = std::array<bool, kNumRanks>;
+
+// Adds one entry per run of consecutive complete classes in `whole`, highest first. `top` is the
+// highest rank a run can reach (A for pairs, one below the high card for kickers), where the run
+// is written with "+"; name(rank) writes that rank's class.
+template <typename Name>
+void addRuns(std::vector<std::string>& entries, const RankFlags& whole, int top, const Name& name) {
+  for (int rank = top; rank >= 0; --rank) {
+    if (!whole[static_cast<size_t>(rank)]) continue;
+    const int runHigh = rank;
+    while (rank > 0 && whole[static_cast<size_t>(rank - 1)]) --rank;
+    const int runLow = rank;
+    if (runHigh == runLow) {
+      entries.push_back(name(runHigh));  // "AA", "AKs"
+    } else if (runHigh == top) {
+      entries.push_back(name(runLow) + "+");  // "QQ+", "ATs+"
+    } else {
+      entries.push_back(name(runHigh) + "-" + name(runLow));  // "JJ-99", "A5s-A2s"
+    }
+  }
+}
+
 }  // namespace
 
 void Range::add(HoleCards hand) {
@@ -199,6 +251,62 @@ std::variant<Range, RangeError> parseRange(std::string_view text) {
     start = comma + 1;
   }
   return range;
+}
+
+std::string formatRange(const Range& range) {
+  if (range.size() == Range::kNumCombos) return "random";
+  std::vector<std::string> entries;
+
+  // Pairs.
+  RankFlags wholePairs{};
+  for (int rank = 0; rank < kNumRanks; ++rank) {
+    wholePairs[static_cast<size_t>(rank)] = hasWholeClass(range, rank, rank, Suitedness::kAny);
+  }
+  addRuns(entries, wholePairs, kNumRanks - 1,
+          [](int rank) { return className(rank, rank, Suitedness::kAny); });
+
+  // Non-pairs, by high card. When the suited and offsuit classes are complete for exactly the same
+  // kickers, one entry without s/o covers both ("AT+" rather than "ATs+, ATo+").
+  std::array<RankFlags, kNumRanks> wholeSuited{};   // [high][kicker]
+  std::array<RankFlags, kNumRanks> wholeOffsuit{};  // [high][kicker]
+  for (int high = kNumRanks - 1; high > 0; --high) {
+    RankFlags& suited = wholeSuited[static_cast<size_t>(high)];
+    RankFlags& offsuit = wholeOffsuit[static_cast<size_t>(high)];
+    for (int kicker = 0; kicker < high; ++kicker) {
+      suited[static_cast<size_t>(kicker)] = hasWholeClass(range, high, kicker, Suitedness::kSuited);
+      offsuit[static_cast<size_t>(kicker)] =
+          hasWholeClass(range, high, kicker, Suitedness::kOffsuit);
+    }
+    const auto named = [high](Suitedness suitedness) {
+      return [high, suitedness](int kicker) { return className(high, kicker, suitedness); };
+    };
+    if (suited == offsuit) {
+      addRuns(entries, suited, high - 1, named(Suitedness::kAny));
+    } else {
+      addRuns(entries, suited, high - 1, named(Suitedness::kSuited));
+      addRuns(entries, offsuit, high - 1, named(Suitedness::kOffsuit));
+    }
+  }
+
+  // Hands whose class isn't complete, one by one, highest first. combos() lists each hand with
+  // its higher card first, so hand[0] has the higher rank (or the same rank, for a pair).
+  const auto combos = range.combos();
+  for (auto it = combos.rbegin(); it != combos.rend(); ++it) {
+    const HoleCards& hand = *it;
+    const auto high = static_cast<size_t>(hand[0].rank());
+    const auto low = static_cast<size_t>(hand[1].rank());
+    const bool inWholeClass = high == low                        ? wholePairs[high]
+                              : hand[0].suit() == hand[1].suit() ? wholeSuited[high][low]
+                                                                 : wholeOffsuit[high][low];
+    if (!inWholeClass) entries.push_back(hand[0].toString() + hand[1].toString());
+  }
+
+  std::string text;
+  for (const std::string& entry : entries) {
+    if (!text.empty()) text += ", ";
+    text += entry;
+  }
+  return text;
 }
 
 }  // namespace poker

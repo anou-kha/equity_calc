@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(poker_equity VERSION 1.0.0 LANGUAGES CXX)
+project(poker_equity VERSION 1.1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -132,7 +132,8 @@ if(EMSCRIPTEN AND NOT POKER_WASM_THREADS)
   file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/package.json" "{ \"type\": \"module\" }\n")
 
   # The web page (web/) and the module together in <build>/site, ready to serve as static files.
-  set(POKER_WEB_FILES web/index.html web/style.css web/app.js web/worker.js)
+  set(POKER_WEB_FILES web/index.html web/style.css web/app.js web/worker.js web/page_module.js
+    web/range_picker.js web/card_picker.js)
   list(TRANSFORM POKER_WEB_FILES PREPEND "${CMAKE_CURRENT_SOURCE_DIR}/")
   add_custom_target(poker_site ALL
     COMMAND ${CMAKE_COMMAND} -E make_directory site
