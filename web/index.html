@@ -33,14 +33,22 @@
       <div class="card-fields">
         <div class="field">
           <label for="board">Board <span class="hint">0, 3, 4 or 5 cards</span></label>
-          <input id="board" name="board" placeholder="e.g. Js Ts 2h" autocomplete="off"
-                 spellcheck="false" aria-describedby="board-error">
+          <div class="input-row">
+            <input id="board" name="board" placeholder="e.g. Js Ts 2h" autocomplete="off"
+                   spellcheck="false" aria-describedby="board-error">
+            <button type="button" id="pick-board" class="secondary"
+                    aria-label="Pick the board cards">Pick</button>
+          </div>
           <p class="error" id="board-error"></p>
         </div>
         <div class="field">
           <label for="dead">Dead cards <span class="hint">cards nobody can have</span></label>
-          <input id="dead" name="dead" placeholder="e.g. 9c" autocomplete="off" spellcheck="false"
-                 aria-describedby="dead-error">
+          <div class="input-row">
+            <input id="dead" name="dead" placeholder="e.g. 9c" autocomplete="off"
+                   spellcheck="false" aria-describedby="dead-error">
+            <button type="button" id="pick-dead" class="secondary"
+                    aria-label="Pick the dead cards">Pick</button>
+          </div>
           <p class="error" id="dead-error"></p>
         </div>
       </div>
@@ -170,6 +178,23 @@
     <div class="actions">
       <button type="button" id="range-picker-use">Use range</button>
       <button type="button" id="range-picker-cancel" class="secondary">Cancel</button>
+    </div>
+  </dialog>
+
+  <dialog id="card-picker" class="picker" aria-labelledby="card-picker-title" tabindex="-1">
+    <div class="picker-header">
+      <h2 id="card-picker-title">Cards</h2>
+      <span id="card-picker-count" class="picker-count" aria-live="polite"></span>
+    </div>
+    <p class="hint">Click cards to add or remove them.</p>
+    <p id="card-picker-note" class="error"></p>
+    <div id="card-grid" class="card-grid"></div>
+    <p id="card-picker-unavailable" class="hint"></p>
+    <p class="picker-text"><code id="card-picker-text"></code></p>
+    <div class="actions">
+      <button type="button" id="card-picker-use">Use cards</button>
+      <button type="button" id="card-picker-cancel" class="secondary">Cancel</button>
+      <button type="button" id="card-picker-clear" class="secondary">Clear</button>
     </div>
   </dialog>
 

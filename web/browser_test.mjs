@@ -339,6 +339,73 @@ async function runTests() {
   assert.equal(await text("range-picker-count"), "0 hands · 0.0%");
   await click("range-picker-cancel");
 
+  // ---- The card picker ----
+
+  const cardSelector = (card) => `.card-cell[aria-label="${card}"]`;
+  const clickCard = (card) => page(`document.querySelector('${cardSelector(card)}').click()`);
+  const cardState = (card) => page(`(() => {
+      const button = document.querySelector('${cardSelector(card)}');
+      return button.disabled ? 'disabled' : button.getAttribute('aria-pressed');
+    })()`);
+  const cardPickerOpen = `${el("card-picker")}.open`;
+
+  // Cards held by known hands, or dead, can't go on the board.
+  await type("player-1", "AsKs");
+  await type("player-2", "QhQd");
+  await type("board", "");
+  await type("dead", "9c");
+  await click("pick-board");
+  await waitFor(cardPickerOpen, "the board picker");
+  assert.equal(await text("card-picker-title"), "Board");
+  assert.equal(await page("document.activeElement.id"), "card-picker");  // no card looks focused
+  for (const card of ["As", "Ks", "Qh", "Qd", "9c"]) {
+    assert.equal(await cardState(card), "disabled", card);
+  }
+  assert.equal(await text("card-picker-unavailable"),
+               "Greyed-out cards are held by Player 1, held by Player 2 and in the dead cards.");
+
+  // Cards keep the order they were clicked in; a board of 1 or 2 cards gets a reminder.
+  await clickCard("Js");
+  assert.equal(await text("card-picker-note"), "A board has 0, 3, 4 or 5 cards.");
+  await clickCard("Ts");
+  await clickCard("2h");
+  assert.equal(await text("card-picker-text"), "Js Ts 2h");
+  assert.equal(await text("card-picker-count"), "3 of 5 cards");
+  assert.equal(await text("card-picker-note"), "");
+  assert.equal(await cardState("Js"), "true");
+  await screenshot("card-picker-desktop.png");
+
+  // At five cards the rest are disabled; removing one frees them again.
+  await clickCard("3c");
+  await clickCard("4d");
+  assert.equal(await cardState("5h"), "disabled");
+  await clickCard("4d");
+  await clickCard("3c");
+  assert.equal(await cardState("5h"), "false");
+  await click("card-picker-use");
+  assert.equal(await page(cardPickerOpen), false);
+  assert.equal(await page(`${el("board")}.value`), "Js Ts 2h");
+
+  // The dead-card picker greys out the board instead; Cancel leaves the box alone.
+  await click("pick-dead");
+  await waitFor(cardPickerOpen, "the dead-card picker");
+  assert.equal(await text("card-picker-title"), "Dead cards");
+  assert.equal(await cardState("Js"), "disabled");
+  assert.equal(await cardState("9c"), "true");
+  await clickCard("8c");
+  assert.equal(await text("card-picker-text"), "9c 8c");
+  assert.equal(await text("card-picker-count"), "2 cards");
+  await click("card-picker-cancel");
+  assert.equal(await page(`${el("dead")}.value`), "9c");
+
+  // Cards that can't be read: the picker says why and starts empty.
+  await type("board", "Js Zz");
+  await click("pick-board");
+  await waitFor(cardPickerOpen, "the board picker again");
+  assert.match(await text("card-picker-note"), /couldn't be read: invalid cards: Js Zz/);
+  assert.equal(await text("card-picker-count"), "0 of 5 cards");
+  await click("card-picker-cancel");
+
   // At phone width, nothing is wider than the screen, the results table included.
   await open("?p=QQ%2B%2C+AKs&p=random&p=random");
   await waitForResults("three players");
@@ -365,6 +432,16 @@ async function runTests() {
   assert.ok(fits.cellWidth >= 22, `cells are only ${fits.cellWidth}px wide`);
   await screenshot("picker-phone-dark.png");
   await click("range-picker-cancel");
+
+  await click("pick-board");
+  await waitFor(cardPickerOpen, "the board picker on a phone");
+  assert.equal(await page(`(() => {
+      const picker = document.getElementById('card-picker');
+      return picker.getBoundingClientRect().right <= window.innerWidth &&
+             picker.scrollWidth <= picker.clientWidth;
+    })()`), true, "the card picker is wider than the screen");
+  await screenshot("card-picker-phone-dark.png");
+  await click("card-picker-cancel");
 
   assert.deepEqual(consoleProblems, [], "errors or warnings in the browser console");
   socket.close();

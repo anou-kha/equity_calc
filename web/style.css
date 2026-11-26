@@ -480,6 +480,41 @@ footer {
   justify-content: flex-end;
 }
 
+/* ---- Card picker ---- */
+
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(13, 1fr);
+  gap: 3px;
+}
+
+.card-cell {
+  aspect-ratio: 3 / 4;
+  min-width: 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--background);
+  color: var(--text);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.card-cell.red {
+  color: var(--red-suit);
+}
+
+.card-cell[aria-pressed="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+}
+
+.card-cell:disabled {
+  opacity: 0.3;
+  text-decoration: line-through;
+}
+
 footer a {
   color: inherit;
 }
@@ -523,5 +558,9 @@ footer a {
   .hand-cell {
     aspect-ratio: 1;  /* square cells are easier to tap */
     font-size: 0.6rem;
+  }
+
+  .card-cell {
+    font-size: 0.68rem;
   }
 }
