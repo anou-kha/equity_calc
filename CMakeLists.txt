@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(poker_equity VERSION 1.1.0 LANGUAGES CXX)
+project(poker_equity VERSION 1.2.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -102,6 +102,7 @@ add_library(poker
   src/equity.cpp
   src/evaluator.cpp
   src/fast_evaluator.cpp
+  src/hand_ranking.cpp
   src/monte_carlo.cpp
   src/random.cpp
   src/range.cpp
@@ -192,6 +193,7 @@ if(POKER_BUILD_TESTS AND POKER_BUILD_PROGRAMS)
     tests/test_equity.cpp
     tests/test_evaluator.cpp
     tests/test_fast_evaluator.cpp
+    tests/test_hand_ranking.cpp
     tests/test_heads_up.cpp
     tests/test_monte_carlo.cpp
     tests/test_multithreading.cpp
@@ -245,4 +247,12 @@ if(POKER_BUILD_BENCH AND POKER_BUILD_PROGRAMS)
   add_executable(poker_bench bench/bench_main.cpp)
   target_link_libraries(poker_bench PRIVATE poker)
   poker_copy_asan_runtime(poker_bench)
+endif()
+
+# ---- Tools -----------------------------------------------------------------
+# poker_rank_hands computes the hand ranking in src/hand_ranking_table.inc (see the tool).
+if(POKER_BUILD_PROGRAMS)
+  add_executable(poker_rank_hands tools/rank_hands.cpp)
+  target_link_libraries(poker_rank_hands PRIVATE poker)
+  poker_copy_asan_runtime(poker_rank_hands)
 endif()

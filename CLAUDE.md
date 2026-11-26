@@ -43,6 +43,7 @@ also run both WebAssembly builds' tests.
 - `src/` — library implementation + `main.cpp` (CLI)
 - `tests/` — GoogleTest unit tests (fetched via CMake FetchContent)
 - `bench/` — benchmark executable(s), plain `std::chrono`, no external deps
+- `tools/` — `poker_rank_hands`, which computes the hand ranking (`src/hand_ranking_table.inc`)
 - `wasm/` — the browser module's JavaScript binding (embind) and its Node smoke test
 - `web/` — the web page: plain HTML/CSS/JS, a Web Worker, and their tests (Node, headless Chrome)
 - `docs/` — design notes, benchmark results
@@ -88,6 +89,12 @@ also run both WebAssembly builds' tests.
   `parseCards`): the page's pickers call them through a second copy of the module on the page's
   thread (`web/page_module.js`), never a JavaScript reimplementation. `formatRange` must stay the
   exact inverse of `parseRange` (the round-trip tests in `test_range.cpp`).
+- The hand ranking behind "top X%" ranges (`hand_ranking.hpp`) is exact equity against one random
+  hand. `src/hand_ranking_table.inc` is generated: never edit it by hand. If a fix ever changes
+  what exact enumeration computes, regenerate it with
+  `poker_rank_hands > src/hand_ranking_table.inc` (Release, about 30 minutes on 16 threads) and run
+  the opt-in `*RecomputedExactly*` test. Range choices made from it still go through the C++
+  (`topRange`), never JavaScript.
 - Add new source files to `CMakeLists.txt` explicitly (no globbing).
 - Small, focused commits with descriptive messages.
 
@@ -101,4 +108,5 @@ also run both WebAssembly builds' tests.
 7. ✅ Range parsing (`AKs, QQ+, A5s-A2s, 22+`) and range-vs-range equity
 8. ✅ CLI polish, then WebAssembly build + web frontend (version 1.0.0)
 9. ✅ Range and card pickers for the web page (version 1.1.0)
-10. Next: a "top X%" slider for the range picker, using a hand ranking computed with this calculator
+10. ✅ A "top X%" slider for the range picker, using a hand ranking computed with this calculator
+    (version 1.2.0)

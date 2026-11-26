@@ -337,6 +337,32 @@ async function runTests() {
   await page("document.querySelector('.player .pick').click()");
   await waitFor(pickerOpen, "the range picker again");
   assert.equal(await text("range-picker-count"), "83 hands · 6.3%");
+
+  // The "Top hands" slider starts at the range's share of all hands (83 of 1,326, to the nearest
+  // half percent). Moving it replaces the selection with the best hands (topRange() in the C++).
+  assert.equal(await page(`${el("top-slider")}.value`), "6.5");
+  assert.equal(await text("top-value"), "6.5%");
+  await page(`(() => {
+      const slider = ${el("top-slider")};
+      slider.value = "10";
+      slider.dispatchEvent(new Event("input", { bubbles: true }));
+    })()`);
+  assert.equal(await pickerText(), "66+, A8s+, ATo+, KJs+");
+  assert.equal(await text("range-picker-count"), "134 hands · 10.1%");
+  assert.equal(await text("top-value"), "10%");
+  await screenshot("picker-top-range.png");
+  // The arrow keys move it half a percent, through the browser's own input event.
+  await page(`${el("top-slider")}.focus()`);
+  for (const type of ["rawKeyDown", "keyUp"]) {
+    await send("Input.dispatchKeyEvent",
+               { type, key: "ArrowRight", code: "ArrowRight", windowsVirtualKeyCode: 39 });
+  }
+  assert.equal(await text("top-value"), "10.5%");
+  assert.equal(await pickerText(), "66+, A8s+, ATo+, KTs+");
+  // Each cell's tooltip gives its place in that ranking.
+  assert.equal(await page(`document.querySelector('${await cell("AKs")}').title`),
+               "AKs: 4 of 4 hands · #8 of 169, 67.0% against a random hand");
+
   await quick("clear");
   await click("range-picker-cancel");
   assert.equal(await page(`${el("player-1")}.value`), "22+, AKs, AhJh");

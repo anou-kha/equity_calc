@@ -1,6 +1,7 @@
 // The range picker: a 13×13 grid of hand classes (pairs on the diagonal, suited hands above it,
 // offsuit below), in a dialog. Clicking or dragging across cells adds or removes whole classes;
-// the suit buttons below the grid add or remove single hands of the last class touched.
+// the suit buttons below the grid add or remove single hands of the last class touched; and the
+// "Top hands" slider replaces the selection with the best X% of hands (topRange() in the C++).
 //
 // The selection is one Set of hands, numbered as in the C++ code. Everything on screen (cell
 // shading, suit buttons, the range text and the count) is redrawn from it after every change, so
@@ -64,6 +65,8 @@ const suitLabel = byId("suit-row-label");
 const textElement = byId("range-picker-text");
 const countElement = byId("range-picker-count");
 const noteElement = byId("range-picker-note");
+const topSlider = byId("top-slider");
+const topValue = byId("top-value");
 
 const selected = new Set();  // hand keys
 let current = CLASSES[0];    // the class whose single hands the suit buttons show
@@ -71,6 +74,7 @@ let paintMode = null;        // while dragging: "add" or "remove"
 let lastPainted = null;      // the cell painted last during a drag
 let poker = null;            // the page's module, once loaded
 let onUse = null;            // what "Use range" does with the text
+let rankNotes = null;        // class name -> its place in the slider's ranking, for its tooltip
 
 function count(handClass) {
   return handClass.hands.filter((hand) => selected.has(handKey(...hand))).length;
@@ -131,8 +135,9 @@ function draw() {
     const cell = cells[index];
     cell.style.setProperty("--fill", `${(100 * chosen) / total}%`);
     cell.setAttribute("aria-pressed", chosen === total ? "true" : chosen > 0 ? "mixed" : "false");
-    cell.setAttribute("aria-label", `${handClass.name}: ${chosen} of ${total} hands`);
-    cell.title = `${handClass.name}: ${chosen} of ${total} hands`;
+    const label = `${handClass.name}: ${chosen} of ${total} hands`;
+    cell.setAttribute("aria-label", label);
+    cell.title = `${label} · ${rankNotes.get(handClass.name)}`;
   });
   drawSuitButtons();
   const hands = [...selected].map((key) => HAND_BY_KEY.get(key));
@@ -142,6 +147,10 @@ function draw() {
   const percent = ((100 * n) / ALL_HANDS).toFixed(1);
   const amount = `${n.toLocaleString("en-US")} ${n === 1 ? "hand" : "hands"}`;
   countElement.textContent = `${amount} · ${percent}%`;
+}
+
+function drawTopValue() {
+  topValue.textContent = `${Number(topSlider.value)}%`;  // e.g. "12.5%"
 }
 
 // ---- Changing the selection ---------------------------------------------------------------------
@@ -215,6 +224,16 @@ for (const button of dialog.querySelectorAll("[data-quick]")) {
   });
 }
 
+// The slider replaces the selection while it moves (by mouse, touch or arrow keys). Editing cells
+// afterwards leaves it where it is: it says what it last picked, the count says what's selected.
+topSlider.addEventListener("input", () => {
+  const range = JSON.parse(poker.topRange(Number(topSlider.value)));
+  selected.clear();
+  for (const hand of range.hands) selected.add(handKey(...hand));
+  drawTopValue();
+  draw();
+});
+
 byId("range-picker-cancel").addEventListener("click", () => dialog.close());
 byId("range-picker-use").addEventListener("click", () => {
   onUse(JSON.parse(poker.formatRange([...selected].map((key) => HAND_BY_KEY.get(key)))).text);
@@ -227,6 +246,12 @@ byId("range-picker-use").addEventListener("click", () => {
 // with the new range's notation.
 export async function openRangePicker({ title, text, use }) {
   poker = await pageModule();
+  rankNotes ??= new Map(
+    JSON.parse(poker.handRanking()).map((handClass, index) => [
+      handClass.name,
+      `#${index + 1} of 169, ${(100 * handClass.equity).toFixed(1)}% against a random hand`,
+    ]),
+  );
   onUse = use;
   byId("range-picker-title").textContent = title;
   selected.clear();
@@ -243,6 +268,9 @@ export async function openRangePicker({ title, text, use }) {
         `The picker starts empty, because the range couldn't be read: ${range.message}.`;
     }
   }
+  // The slider starts at the range's share of all hands, to the nearest half percent.
+  topSlider.value = String(Math.round((200 * selected.size) / ALL_HANDS) / 2);
+  drawTopValue();
   draw();
   dialog.showModal();
   dialog.focus();  // not the first cell, which would look highlighted; Tab moves into the grid

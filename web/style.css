@@ -448,6 +448,37 @@ footer {
   gap: 6px;
 }
 
+/* "Top hands", the slider and its value on one line. */
+.top-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.top-row label {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+  font-weight: normal;
+  white-space: nowrap;
+}
+
+.top-row input[type="range"] {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  accent-color: var(--accent);
+}
+
+.top-row output {
+  min-width: 3.5em;  /* room for "12.5%" or "100%", so the slider doesn't change width */
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
 .quick-buttons {
   display: flex;
   flex-wrap: wrap;

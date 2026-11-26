@@ -22,6 +22,8 @@ to WebAssembly, for the browser.
   end to end in headless Chrome and deployed with GitHub Pages
 - ✅ Range and card pickers on the page: a 13×13 hand grid (click or drag to select, then fine-tune
   single hands) that writes standard notation, and a 52-card picker for the board and dead cards
+- ✅ A "top X%" slider in the range picker, from a ranking of all 169 starting hands by exact
+  equity against a random hand, computed with this calculator (355 billion showdowns)
 
 ## Build
 
@@ -51,10 +53,11 @@ it on Linux.
 
 **Slow tests:** a few tests are disabled by default because they take seconds even in Release:
 checking every 6- and 7-card hand (the known category frequencies for both evaluators, and that the
-fast evaluator matches the reference on every hand), and an exact AA-against-any-hand enumeration
-of 2.1 billion showdowns that must reproduce the Wizard of Odds' published counts. Run them with:
+fast evaluator matches the reference on every hand), an exact AA-against-any-hand enumeration of
+2.1 billion showdowns that must reproduce the Wizard of Odds' published counts, and an exact
+recheck of three rows of the hand ranking. Run them with:
 ```bash
-./build/poker_tests --gtest_also_run_disabled_tests --gtest_filter=*AllSevenCard*:FastEvaluator.*:*WizardOfOdds*
+./build/poker_tests --gtest_also_run_disabled_tests --gtest_filter=*AllSevenCard*:FastEvaluator.*:*WizardOfOdds*:*RecomputedExactly*
 ```
 
 ### WebAssembly and the web page
@@ -238,10 +241,12 @@ varies with temperature and power settings, so only figures from the same sessio
 ## Project layout
 
 ```
-include/poker/   public headers: calculator, card, evaluator, equity, monte_carlo, random, range
+include/poker/   public headers: calculator, card, evaluator, equity, hand_ranking, monte_carlo,
+                 random, range
 src/             library + CLI (main.cpp)
 tests/           GoogleTest unit tests, and the CLI's end-to-end tests
 bench/           benchmarks
+tools/           poker_rank_hands, which computes the hand ranking stored in src/
 wasm/            the JavaScript binding for the browser module, and its smoke test
 web/             the web page (HTML, CSS, JavaScript, Web Worker) and its tests
 docs/            design notes (see docs/design.md)
@@ -257,5 +262,5 @@ docs/            design notes (see docs/design.md)
 - [x] Range parsing & range-vs-range equity
 - [x] CLI polish, WebAssembly build + web UI (version 1.0.0)
 - [x] Range and card pickers for the web page (version 1.1.0)
-- [ ] Next: a "top X%" slider for the range picker, from a hand ranking computed with this
-  calculator
+- [x] A "top X%" slider for the range picker, from a hand ranking computed with this calculator
+  (version 1.2.0)

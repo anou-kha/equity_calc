@@ -86,6 +86,11 @@ std::string toJson(const CalculationError& error);
 std::string rangeJson(std::string_view text);
 std::string rangeJson(const Range& range);
 
+// For the range picker's "top X%" slider: the 169 starting-hand classes, best first, as
+// [{"name":"AA","equity":0.852...},...] (equity against one random hand, see hand_ranking.hpp).
+// The slider's ranges themselves are rangeJson(topRange(percent)).
+std::string handRankingJson();
+
 // For card pickers: cards like "jsTs2h" as JSON, {"ok":true,"text":"Js Ts 2h","cards":[39,35,2]},
 // in the order given, or {"ok":false,"message":"invalid cards: ..."} if the text can't be read (a
 // card given twice included). No cards at all is fine.

@@ -189,6 +189,28 @@ check("parseCards reads cards in order", () => {
   assert.equal(JSON.parse(poker.parseCards("As As")).ok, false);
 });
 
+check("topRange takes the best hand classes", () => {
+  const top = JSON.parse(poker.topRange(1));
+  assert.equal(top.ok, true);
+  assert.equal(top.text, "KK+");
+  assert.equal(top.hands.length, 12);
+  assert.equal(JSON.parse(poker.topRange(0)).text, "");
+  assert.equal(JSON.parse(poker.topRange(100)).text, "random");
+  for (const percent of [undefined, "10", [10]]) {
+    const result = JSON.parse(poker.topRange(percent));
+    assert.equal(result.ok, false, JSON.stringify(percent));
+    assert.match(result.message, /^request: topRange\(\) takes a number/);
+  }
+});
+
+check("handRanking lists the 169 classes, best first", () => {
+  const ranking = JSON.parse(poker.handRanking());
+  assert.equal(ranking.length, 169);
+  assert.equal(ranking[0].name, "AA");
+  assert.equal(ranking.at(-1).name, "32o");
+  assert.ok(ranking.every((c, i) => i === 0 || c.equity < ranking[i - 1].equity));
+});
+
 if (failures > 0) {
   console.log(`${failures} check(s) failed`);
   process.exit(1);

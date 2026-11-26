@@ -812,6 +812,51 @@ rare or symmetric. Without a test aimed at the bias, the bug would have gone unn
 | AKs vs QQ range | exactly 12 × (shares a suit + shares none): 46.05% / 53.95% |
 | One-hand ranges | the same counts *and errors* as the HoleCards versions |
 
+### A hand ranking, and "top X%" ranges
+
+Players often describe a range as "the top 15% of hands". That needs an order for the 169
+starting-hand classes (13 pairs, 78 suited, 78 offsuit), and the range picker's slider (section 10)
+uses one computed with this calculator.
+
+- **The criterion:** each class's exact preflop equity against one random hand: 85.20% for AA,
+  down to 32.30% for 32o. It's the simplest ranking that is exact and easy to explain, and it can
+  be checked against a published table.
+- **One hand per class is enough.** Hold'em suits have no order, so relabelling them changes
+  nothing: A♠A♥ does exactly as well against a random hand as A♦A♣. Each class is then one hand
+  against all 1,225 others, on all 1,712,304 boards: 2.1 billion showdowns. All 169 are 355
+  billion, which took 31.5 minutes on 16 threads: far too slow for the page. So
+  `tools/rank_hands.cpp` (`poker_rank_hands`) computes them once and prints a table that is stored
+  in the source, `src/hand_ranking_table.inc`. It stores whole-number counts (wins and ties), not
+  rounded percentages, so classes compare exactly and the table can be checked exactly.
+- **`topRange(percent)`** takes whole classes, best first, and stops where the number of hands is
+  closest to that share of all 1,326 (a tie goes to the smaller range). Whole classes keep the
+  range short to write and easy to read. One class is 4, 6 or 12 hands (0.3–0.9%), so "10%" is 134
+  hands, 10.1%: `66+, A8s+, ATo+, KJs+`.
+
+The checks (`tests/test_hand_ranking.cpp`): AA's counts equal the Wizard of Odds' exhaustive table
+exactly (a sixth of its totals), and 72o's match its rounded percentages. Every class appears once,
+together they are all 1,326 hands, and the order is strictly decreasing. Every class agrees with a
+Monte Carlo run of its whole range, which would catch a row filed under the wrong class. An opt-in
+test recomputes KK, J6s and 32o exactly with a different hand of each (clubs and diamonds, where the
+tool used spades and hearts) and gets exactly the same counts, which confirms the suit-symmetry
+shortcut too. And `topRange` is checked at every 0.25% from 0 to 100%.
+
+**What this ranking gets wrong.** Equity against *one* random hand rewards high cards, and ignores
+how hands do against several opponents or when they don't go all-in. Heads-up, K2o (50.5%) beats 22
+(50.3%), A2o (54.9%) is far ahead of 76s (45.4%), and the worst hand is 32o, not the famous 72o (5th
+from the bottom): against one random hand the higher card wins most showdowns, and 72o's missing
+straight potential matters less. A ranking for multiway pots would put suited connectors much
+higher. It's an exact, explainable choice for a slider, but not the only reasonable one.
+
+**Two bugs from one trap.** The generator crashed at once: `const auto& result =
+std::get<EquityResult>(exactEquity(...))` keeps a reference into the *temporary* `std::variant`
+that `exactEquity()` returns, and that temporary is destroyed at the end of the line. Then GCC's
+`-Wdangling-reference` flagged `for (hand : std::get<Range>(parseRange(name)).combos())`: in C++20
+the temporary is destroyed before the loop body runs (C++23 keeps temporaries in a range-for's
+initializer alive for the whole loop). Both now keep the value in a named variable first. The
+`formatRange` tests made the same mistake (above), so the rule is worth remembering: never keep a
+reference or a `std::span` into a temporary.
+
 ## 8. The calculator layer and the command-line tool
 
 The command-line tool and the web page need the same steps: read ranges and cards typed as text,
@@ -954,6 +999,9 @@ Each player's range, the board and the dead cards have a **Pick** button that op
   uses: pairs on the diagonal, suited hands above it, offsuit below. Clicking or dragging across
   cells adds or removes whole classes, and buttons below the grid toggle the single hands of the
   last class touched (A♠K♠, A♥K♥, …). A partly chosen class shows the chosen fraction as a bar.
+  Its **Top hands** slider replaces the selection with the best X% of hands as it moves (section 7,
+  "A hand ranking"), starting at the share of hands in the range being edited; editing cells
+  afterwards doesn't move it. Each cell's tooltip gives its place in that ranking.
 - **The card picker** (`web/card_picker.js`) shows the 52 cards in four rows and keeps them in the
   order clicked. Cards held by a known hand, or already in the other field, are disabled with the
   reason, and the board stops at five.
@@ -962,7 +1010,8 @@ How they're built:
 
 - **The C++ stays the only source of notation.** The pickers never parse or write range or card
   text themselves: they call `parseRange`, `formatRange` and `parseCards` in the module, so the
-  picker and the calculator can't disagree about what a range means. For that, the page loads a
+  picker and the calculator can't disagree about what a range means. The slider likewise calls
+  `topRange` rather than choosing hands from the ranking in JavaScript. For that, the page loads a
   second copy of the module on its own thread (`web/page_module.js`), separate from the worker's.
   It answers in well under a millisecond, even while the worker is busy.
 - **One source of truth for the selection:** a single `Set` of hands, numbered as in the C++ code.
@@ -992,8 +1041,9 @@ How they're built:
 - For the pickers it drags with **real mouse events**, sent through the DevTools protocol (press on
   one cell, move over others, release), so the page's pointer code runs exactly as it does for a
   person; calling `.click()` would skip it. It also checks the single-hand buttons, keyboard
-  toggling, Use and Cancel, unreadable input, the disabled cards and the 5-card limit, and that both
-  panels fit a phone. Switching drag painting off makes it fail.
+  toggling, the slider (its starting position, 10%, and an arrow key sent as a real key press),
+  Use and Cancel, unreadable input, the disabled cards and the 5-card limit, and that both panels
+  fit a phone. Switching drag painting off makes it fail.
 - These tests found three real problems while the page was being built. Exact enumeration of three
   random hands crashed the module, a bug in the library since step 7 that the CLI had too (section
   7, "A limit on deals"). The results table hid its Equity column on phones. And the equity and its
@@ -1182,7 +1232,19 @@ deals the same boards, and prints the same numbers, on every platform.
 - **Tell me about a C++ lifetime bug.** `for (auto hand : range("random").combos())`: `combos()` is a
   view into a temporary that dies before the loop body runs (until C++23), so the loop reads freed
   memory. A test of mine did that; it showed up as 525 garbage hands, and the fix is to store the
-  range in a variable first.
+  range in a variable first. It happened twice more in the hand ranking: a `const auto&` into the
+  temporary `std::variant` an equity function returned (an instant crash), and the same range-for
+  pattern, which GCC's `-Wdangling-reference` flagged before it ever ran.
+- **How did you rank the starting hands?** By exact preflop equity against one random hand,
+  computed with the calculator itself: one hand per class (suit symmetry makes any one do), 2.1
+  billion showdowns each, 355 billion in all, half an hour on 16 threads. That's done once by a
+  tool, and the whole-number counts are stored in the source. AA matches the Wizard of Odds' table
+  exactly, and a test recomputes three classes with differently suited hands to confirm the
+  symmetry.
+- **What's wrong with that ranking?** It's heads-up and all-in, so it rewards high cards: K2o
+  beats 22, A2o is far ahead of 76s, and the worst hand is 32o, not 72o. Against several opponents,
+  or when hands don't go all-in, suited connectors are worth much more. It's exact and explainable,
+  which suits a slider, but it isn't the only reasonable choice.
 - **Tell me about an optimisation that backfired.** A heads-up fast path made exact enumeration
   24% faster but Monte Carlo 37% slower. The disassembly showed why: `++counts[winner].wins`
   writes to an address that depends on who won, which the CPU handles well when the same player
