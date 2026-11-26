@@ -1,25 +1,8 @@
-// poker_cli: all-in equity from the command line, for known hands or ranges.
-//
-//   poker_cli AsKs QhQd                          heads-up preflop
-//   poker_cli AsKs QhQd --board Js Ts 2h         on a flop
-//   poker_cli AsKs QhQd 7c7d --dead 9c           three players, with a dead card
-//   poker_cli "QQ+, AKs" "JJ-99, AQs"            ranges (notation: see range.hpp)
-//   poker_cli AsAh random                        a hand against any two cards
-//   poker_cli AsKs QhQd --trials 1000000 --seed 7
-//   poker_cli AsKs QhQd --threads 1              single-threaded
-//
-// Each player is a range; a known hand like AsKs is a range of one. The answer is exact if that
-// takes at most 200 million showdowns (about a second on 8 cores), and otherwise a Monte Carlo
-// estimate from 10 million random deals, with a 95% margin of error. --exact forces exact
-// enumeration; --trials (or --seed) chooses Monte Carlo. Monte Carlo answers are reproducible: the
-// same command and seed always print the same numbers.
-//
-// --board and --dead take every following argument up to the next option, so "Js Ts 2h" and
-// "JsTs2h" both work. The work is shared between all hardware threads unless --threads says
-// otherwise; the number of threads never changes the answer, only the time.
-#include <algorithm>
+// poker_cli: all-in equity from the command line, for known hands or ranges. `poker_cli --help`
+// describes everything it can do. The work itself is done by the calculator layer
+// (calculator.hpp), which the WebAssembly build shares, so this file only reads the arguments and
+// prints the report.
 #include <charconv>
-#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <iomanip>
@@ -30,39 +13,65 @@
 #include <string_view>
 #include <system_error>
 #include <variant>
-#include <vector>
 
-#include "poker/card.hpp"
-#include "poker/equity.hpp"
-#include "poker/evaluator.hpp"
-#include "poker/monte_carlo.hpp"
-#include "poker/range.hpp"
+#include "poker/calculator.hpp"
 
 namespace {
 
-using Clock = std::chrono::steady_clock;
-
-constexpr uint64_t kDefaultSeed = 1;
-constexpr uint64_t kDefaultTrials = 10'000'000;
-constexpr uint64_t kExactLimit = 200'000'000;  // most showdowns to enumerate without --exact
-constexpr uint64_t kMaxThreads = 256;          // the library never uses more than this
-
-struct Options {
-  std::vector<std::string> rangeTexts;  // each player's range as typed
-  std::vector<poker::Range> players;
-  std::vector<poker::Card> board;
-  std::vector<poker::Card> dead;
-  bool exact = false;              // --exact
-  std::optional<uint64_t> trials;  // --trials: Monte Carlo
-  std::optional<uint64_t> seed;    // --seed: Monte Carlo
-  unsigned threads = 0;            // 0: one per hardware thread
-};
+constexpr uint64_t kMaxThreads = 256;  // the library never uses more than this
 
 constexpr std::string_view kUsage =
     "usage: poker_cli <range> <range> [<range> ...] [--board <cards>] [--dead <cards>]\n"
-    "                 [--exact | --trials <n> [--seed <n>]] [--threads <n>]\n"
-    "  e.g. poker_cli AsKs QhQd --board Js Ts 2h\n"
-    "       poker_cli \"QQ+, AKs\" random\n";
+    "                 [--exact | --trials <n> [--seed <n>]] [--threads <n>] [--json]\n"
+    "Try 'poker_cli --help' for the range notation, all options and examples.\n";
+
+constexpr std::string_view kHelp =
+    R"(poker_cli: Texas Hold'em all-in equity, exact or by Monte Carlo simulation.
+
+Usage: poker_cli <range> <range> [<range> ...] [options]
+
+Each player is a range of possible hands; a known hand like AsKs is a range of one.
+Combine entries with commas, and quote a range that contains spaces ("QQ+, AKs").
+  QQ            a pair                                   6 hands
+  AKs AKo AK    suited / offsuit / both                  4 / 12 / 16 hands
+  QQ+           QQ, KK, AA                               18 hands
+  ATs+          ATs, AJs, AQs, AKs                       16 hands
+  JJ-99         every pair from JJ down to 99            18 hands
+  A5s-A2s       A5s, A4s, A3s, A2s                       16 hands
+  AhKh          one specific hand                        1 hand
+  random, any   any two cards                            1,326 hands
+
+Options:
+  --board <cards>   0, 3, 4 or 5 board cards, e.g. --board Js Ts 2h (spaces optional)
+  --dead <cards>    cards nobody can be dealt, e.g. folded or exposed cards
+  --exact           enumerate every deal and board, however long that takes
+  --trials <n>      Monte Carlo with n random deals (default 10,000,000)
+  --seed <n>        the Monte Carlo random stream (default 1); implies Monte Carlo
+  --threads <n>     threads to use (default 0: all hardware threads)
+  --json            print the result as JSON
+  --help            show this help
+  --version         show the version
+
+Without --exact, --trials or --seed, the answer is exact when that takes at most 200,000,000
+showdowns, and otherwise a Monte Carlo estimate with a 95% margin of error. The same command and
+seed always print the same numbers, whatever the number of threads. Exact enumeration of ranges
+handles up to 4,194,304 deals of the hands (one hand from each range).
+
+Examples:
+  poker_cli AsKs QhQd --board Js Ts 2h
+  poker_cli AA KK
+  poker_cli "QQ+, AKs" random
+  poker_cli AsKs QhQd --trials 1000000 --seed 7 --json
+
+Exit status: 0 on success, 1 if the input is invalid.
+)";
+
+struct Options {
+  poker::CalculationRequest request;
+  bool json = false;
+  bool help = false;
+  bool version = false;
+};
 
 bool isOption(std::string_view arg) { return arg.starts_with("--"); }
 
@@ -75,25 +84,34 @@ std::optional<uint64_t> parseNumber(std::string_view text) {
   return value;
 }
 
-// Parses the arguments, or prints what is wrong and returns std::nullopt.
+// Parses the arguments, or prints what is wrong and returns std::nullopt. Ranges and cards are
+// only collected here; calculate() checks them, so the CLI and the web build report the same
+// errors.
 std::optional<Options> parseOptions(int argc, char** argv) {
   Options options;
+  poker::CalculationRequest& request = options.request;
+  request.threads = 0;  // the CLI uses every hardware thread unless told otherwise
+  bool exact = false;
+  std::optional<uint64_t> trials;
+  std::optional<uint64_t> seed;
+
   for (int i = 1; i < argc; ++i) {
     const std::string_view arg = argv[i];
-    if (arg == "--board" || arg == "--dead") {
+    if (arg == "--help" || arg == "-h") {
+      options.help = true;
+    } else if (arg == "--version") {
+      options.version = true;
+    } else if (arg == "--json") {
+      options.json = true;
+    } else if (arg == "--exact") {
+      exact = true;
+    } else if (arg == "--board" || arg == "--dead") {
       std::string text;  // every argument up to the next option, space-separated
       while (i + 1 < argc && !isOption(argv[i + 1])) {
         if (!text.empty()) text += ' ';
         text += argv[++i];
       }
-      const auto cards = poker::parseCards(text);
-      if (!cards) {
-        std::cerr << "invalid cards after " << arg << ": " << text << '\n';
-        return std::nullopt;
-      }
-      (arg == "--board" ? options.board : options.dead) = *cards;
-    } else if (arg == "--exact") {
-      options.exact = true;
+      (arg == "--board" ? request.board : request.dead) = text;
     } else if (arg == "--trials" || arg == "--seed" || arg == "--threads") {
       std::optional<uint64_t> value;
       if (i + 1 < argc) value = parseNumber(argv[++i]);
@@ -103,41 +121,35 @@ std::optional<Options> parseOptions(int argc, char** argv) {
         return std::nullopt;
       }
       if (arg == "--trials") {
-        options.trials = *value;
+        trials = *value;
       } else if (arg == "--seed") {
-        options.seed = *value;
+        seed = *value;
       } else if (*value > kMaxThreads) {
         std::cerr << "--threads must be at most " << kMaxThreads << " (0 means all of them)\n";
         return std::nullopt;
       } else {
-        options.threads = static_cast<unsigned>(*value);
+        request.threads = static_cast<unsigned>(*value);
       }
     } else if (isOption(arg)) {
       std::cerr << "unknown option: " << arg << '\n' << kUsage;
       return std::nullopt;
     } else {
-      const auto parsed = poker::parseRange(arg);
-      if (const auto* error = std::get_if<poker::RangeError>(&parsed)) {
-        std::cerr << "invalid range \"" << arg << "\"";
-        if (error->token != arg) std::cerr << " at \"" << error->token << "\"";
-        std::cerr << ": " << error->reason << '\n';
-        return std::nullopt;
-      }
-      options.rangeTexts.emplace_back(arg);
-      options.players.push_back(std::get<poker::Range>(parsed));
+      request.ranges.emplace_back(arg);
     }
   }
-  if (options.exact && (options.trials || options.seed)) {
+
+  if (exact && (trials || seed)) {
     std::cerr << "--exact can't be combined with --trials or --seed\n";
     return std::nullopt;
   }
+  if (exact) {
+    request.method = poker::Method::kExact;
+  } else if (trials || seed) {
+    request.method = poker::Method::kMonteCarlo;
+  }
+  if (trials) request.trials = *trials;
+  if (seed) request.seed = *seed;
   return options;
-}
-
-std::string cardsToString(const std::vector<poker::Card>& cards) {
-  std::string text;
-  for (const poker::Card card : cards) text += (text.empty() ? "" : " ") + card.toString();
-  return text.empty() ? "(none)" : text;
 }
 
 // "61,642,944"
@@ -166,99 +178,53 @@ std::string onThreads(unsigned threads) {
   return " on " + std::to_string(threads) + (threads == 1 ? " thread" : " threads");
 }
 
-double secondsSince(Clock::time_point start) {
-  return std::chrono::duration<double>(Clock::now() - start).count();
-}
+void printReport(const poker::CalculationReport& report) {
+  const bool monteCarlo = report.method == poker::Method::kMonteCarlo;
+  std::cout << "Board: " << (report.board.empty() ? "(none)" : report.board) << '\n';
+  if (!report.dead.empty()) std::cout << "Dead:  " << report.dead << '\n';
 
-bool allKnownHands(const Options& options) {
-  return std::all_of(options.players.begin(), options.players.end(),
-                     [](const poker::Range& range) { return range.size() == 1; });
-}
-
-// Prints the error if `outcome` holds one, and returns whether it did.
-template <typename Result>
-bool printIfError(const std::variant<Result, poker::EquityError>& outcome) {
-  if (const auto* error = std::get_if<poker::EquityError>(&outcome)) {
-    std::cerr << "error: " << poker::toString(*error) << '\n';
-    return true;
-  }
-  return false;
-}
-
-// One row per player. `margins` holds each player's 95% margin of error for Monte Carlo results
-// and is empty for exact ones.
-void printTable(const Options& options, const poker::EquityResult& result,
-                const std::vector<double>& margins) {
-  std::cout << "Board: " << cardsToString(options.board) << '\n';
-  if (!options.dead.empty()) std::cout << "Dead:  " << cardsToString(options.dead) << '\n';
-
+  // One row per player.
   size_t rangeWidth = std::string_view("Range").size();
-  for (const std::string& text : options.rangeTexts) rangeWidth = std::max(rangeWidth, text.size());
+  for (const poker::PlayerReport& player : report.players) {
+    rangeWidth = std::max(rangeWidth, player.range.size());
+  }
   const int firstColumn = static_cast<int>(rangeWidth) + 2;
-
   std::cout << '\n'
             << std::left << std::setw(firstColumn) << "Range" << std::right << std::setw(6)
             << "Hands" << std::setw(10) << "Win" << std::setw(10) << "Tie" << std::setw(10)
             << "Equity";
-  if (!margins.empty()) std::cout << std::setw(14) << "95% margin";
+  if (monteCarlo) std::cout << std::setw(14) << "95% margin";
   std::cout << '\n';
-  for (size_t i = 0; i < options.players.size(); ++i) {
-    std::cout << std::left << std::setw(firstColumn) << options.rangeTexts[i] << std::right
-              << std::setw(6) << options.players[i].size() << std::setw(10)
-              << percent(result.win(i)) << std::setw(10) << percent(result.tie(i)) << std::setw(10)
-              << percent(result.equity(i));
-    if (!margins.empty()) std::cout << std::setw(14) << "+/- " + percent(margins[i]);
+  for (const poker::PlayerReport& player : report.players) {
+    std::cout << std::left << std::setw(firstColumn) << player.range << std::right << std::setw(6)
+              << player.hands << std::setw(10) << percent(player.win) << std::setw(10)
+              << percent(player.tie) << std::setw(10) << percent(player.equity);
+    if (monteCarlo) std::cout << std::setw(14) << "+/- " + percent(player.margin95);
     std::cout << '\n';
   }
   std::cout << '\n';
-}
 
-int runExact(const Options& options) {
-  const auto start = Clock::now();
-  const auto outcome =
-      poker::exactEquity(options.players, poker::toMask(options.board), poker::toMask(options.dead),
-                         {.threads = options.threads});
-  const double seconds = secondsSince(start);
-  if (printIfError(outcome)) return 1;
-
-  const auto& result = std::get<poker::EquityResult>(outcome);
-  printTable(options, result, {});
-  if (result.deals == 1) {
-    std::cout << withCommas(result.boards) << " boards";
-  } else {
-    std::cout << withCommas(result.boards) << " showdowns (" << withCommas(result.deals)
-              << " deals of the hands x " << withCommas(result.boards / result.deals) << " boards)";
+  // How the answer was found.
+  if (!monteCarlo) {
+    if (report.deals == 1) {
+      std::cout << withCommas(report.showdowns) << " boards";
+    } else {
+      std::cout << withCommas(report.showdowns) << " showdowns (" << withCommas(report.deals)
+                << " deals of the hands x " << withCommas(report.showdowns / report.deals)
+                << " boards)";
+    }
+    std::cout << " enumerated in " << milliseconds(report.seconds) << onThreads(report.threads)
+              << '\n';
+    return;
   }
-  std::cout << " enumerated in " << milliseconds(seconds) << onThreads(result.threads) << '\n';
-  return 0;
-}
-
-// `automatic`: Monte Carlo was chosen because exact enumeration would take too long.
-int runMonteCarlo(const Options& options, bool automatic) {
-  const poker::MonteCarloOptions monteCarlo = {.trials = options.trials.value_or(kDefaultTrials),
-                                               .seed = options.seed.value_or(kDefaultSeed),
-                                               .threads = options.threads};
-  const auto start = Clock::now();
-  const auto outcome = poker::monteCarloEquity(options.players, poker::toMask(options.board),
-                                               poker::toMask(options.dead), monteCarlo);
-  const double seconds = secondsSince(start);
-  if (printIfError(outcome)) return 1;
-
-  const auto& result = std::get<poker::MonteCarloResult>(outcome);
-  std::vector<double> margins;
-  for (size_t i = 0; i < options.players.size(); ++i) {
-    margins.push_back(result.equity(i).margin95());
-  }
-  printTable(options, result.counts, margins);
-  std::cout << "Monte Carlo: " << withCommas(monteCarlo.trials) << " random "
-            << (allKnownHands(options) ? "boards" : "deals") << " (seed " << monteCarlo.seed
-            << ") in " << milliseconds(seconds) << onThreads(result.counts.threads) << '\n';
-  if (automatic) {
-    std::cout << "Exact enumeration would take over " << withCommas(kExactLimit)
+  std::cout << "Monte Carlo: " << withCommas(report.showdowns) << " random "
+            << (report.knownHands ? "boards" : "deals") << " (seed " << report.seed << ") in "
+            << milliseconds(report.seconds) << onThreads(report.threads) << '\n';
+  if (report.automatic) {
+    std::cout << "Exact enumeration would take over " << withCommas(poker::kAutoExactLimit)
               << " showdowns; --exact forces it.\n";
   }
   std::cout << "The true equity is within the margin for 95% of seeds.\n";
-  return 0;
 }
 
 }  // namespace
@@ -270,13 +236,29 @@ int main(int argc, char** argv) {
   }
   const auto options = parseOptions(argc, argv);
   if (!options) return 1;
-  // Build the evaluator's lookup tables (a few ms, once) before any timing starts, so the reported
-  // time measures only the equity calculation.
-  poker::buildEvaluatorTables();
+  if (options->help) {
+    std::cout << kHelp;
+    return 0;
+  }
+  if (options->version) {
+    std::cout << "poker_cli " << poker::version() << '\n';
+    return 0;
+  }
 
-  if (options->trials || options->seed) return runMonteCarlo(*options, false);
-  if (options->exact) return runExact(*options);
-  const uint64_t showdowns = poker::exactShowdowns(options->players, poker::toMask(options->board),
-                                                   poker::toMask(options->dead), kExactLimit);
-  return showdowns <= kExactLimit ? runExact(*options) : runMonteCarlo(*options, true);
+  const auto outcome = poker::calculate(options->request);
+  if (const auto* error = std::get_if<poker::CalculationError>(&outcome)) {
+    if (options->json) {
+      std::cout << poker::toJson(*error) << '\n';
+    } else {
+      std::cerr << "error: " << error->message << '\n';
+    }
+    return 1;
+  }
+  const auto& report = std::get<poker::CalculationReport>(outcome);
+  if (options->json) {
+    std::cout << poker::toJson(report) << '\n';
+  } else {
+    printReport(report);
+  }
+  return 0;
 }

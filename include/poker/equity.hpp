@@ -51,7 +51,13 @@ enum class EquityError {
   kNoValidDeal,     // the ranges can't all be dealt at once (e.g. AA against AA against AA)
   // For ranges of a single (known) hand, those two cases are reported as kDuplicateCard, just as
   // by the HoleCards versions.
+  kTooManyDeals,  // exact enumeration of ranges with more than kMaxExactDeals deals
 };
+
+// The most deals of the hands exact range enumeration accepts: 2^22 = 4,194,304. It lists every
+// deal in memory before enumerating the boards (88 bytes each, so about 370 MB at this limit), and
+// some spots have billions of deals (three random hands preflop: about 1.8 billion, or 160 GB).
+inline constexpr uint64_t kMaxExactDeals = uint64_t{1} << 22;
 
 std::string_view toString(EquityError error);
 
@@ -75,7 +81,8 @@ std::variant<EquityResult, EquityError> exactEquity(std::span<const HoleCards> p
 // card used twice) combined with every completion of the board. Hands that use a board or dead
 // card are left out of their range. Every deal leaves the same number of cards to complete the
 // board from, so every (deal, board) pair is equally likely and counts once. A known hand is a
-// range with one hand, and gives exactly the same result as the HoleCards version.
+// range with one hand, and gives exactly the same result as the HoleCards version. Ranges with
+// more than kMaxExactDeals deals are refused with kTooManyDeals; monteCarloEquity() handles them.
 std::variant<EquityResult, EquityError> exactEquity(std::span<const Range> players, CardMask board,
                                                     CardMask dead = 0,
                                                     const ExactOptions& options = {});
@@ -83,7 +90,10 @@ std::variant<EquityResult, EquityError> exactEquity(std::span<const Range> playe
 // How many showdowns exactEquity() would score for these ranges, so callers can decide between it
 // and monteCarloEquity(). Counting the deals of wide ranges can itself take a while, so counting
 // stops once it passes `limit`: the result is exact up to `limit`, and otherwise just some number
-// above it. Returns 0 if the input is invalid (exactEquity() then reports the error).
+// above it. Returns 0 if the input is invalid (exactEquity() then reports the error), and
+// UINT64_MAX
+// ("more than any limit") if exactEquity() would refuse the ranges for having over kMaxExactDeals
+// deals, so a caller choosing by the limit picks Monte Carlo for them.
 uint64_t exactShowdowns(std::span<const Range> players, CardMask board, CardMask dead,
                         uint64_t limit);
 

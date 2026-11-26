@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdint>
 #include <initializer_list>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -288,9 +289,32 @@ TEST(RangeEquityErrors, KnownHandsReportDuplicateCards) {
   }
 }
 
+// Exact enumeration lists the deals of the hands in memory before the boards, so it refuses spots
+// with more than kMaxExactDeals of them instead of running out of memory. Three random hands
+// preflop have about 1.8 billion deals (160 GB as a list); this used to crash.
+TEST(RangeEquityErrors, TooManyDealsForExactEnumeration) {
+  const std::vector<Range> threeRandom = ranges({"random", "random", "random"});
+  const auto outcome = poker::exactEquity(threeRandom, 0);
+  ASSERT_TRUE(std::holds_alternative<EquityError>(outcome));
+  EXPECT_EQ(std::get<EquityError>(outcome), EquityError::kTooManyDeals);
+
+  // exactShowdowns() says "more than any limit" for them, so a caller choosing by a limit picks
+  // Monte Carlo, which handles the same spot.
+  EXPECT_EQ(poker::exactShowdowns(threeRandom, 0, 0, uint64_t{1} << 62),
+            std::numeric_limits<uint64_t>::max());
+  EXPECT_TRUE(std::holds_alternative<MonteCarloResult>(
+      poker::monteCarloEquity(threeRandom, 0, 0, {.trials = 1000, .seed = 1})));
+
+  // Under the limit nothing changes: two random hands have 1326 x 1225 deals, each completed by
+  // C(48, 5) boards, and exactShowdowns() still counts them exactly.
+  EXPECT_EQ(poker::exactShowdowns(ranges({"random", "random"}), 0, 0, uint64_t{1} << 62),
+            uint64_t{1326} * 1225 * 1'712'304);
+}
+
 TEST(RangeEquityErrors, EveryErrorHasAMessage) {
   EXPECT_FALSE(poker::toString(EquityError::kEmptyRange).empty());
   EXPECT_FALSE(poker::toString(EquityError::kNoValidDeal).empty());
+  EXPECT_FALSE(poker::toString(EquityError::kTooManyDeals).empty());
 }
 
 }  // namespace

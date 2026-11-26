@@ -1,9 +1,14 @@
 # Design notes
 
-How the equity calculator works, and why it is built this way. The pipeline so far:
+How the equity calculator works, and why it is built this way. The pipeline:
 
 ```
-"QQ+, AKs" "random" --board "Js Ts 2h"
+poker_cli "QQ+, AKs" random --board Js Ts 2h        the web page: form -> Web Worker
+   │  (main.cpp)                                       │  (web/app.js, web/worker.js)
+   │                                                   │  WebAssembly binding (wasm/bindings.cpp)
+   ▼                                                   ▼
+calculate(request): read the input, choose exact or Monte Carlo,     (calculator.hpp)
+   │                report the result as a struct or as JSON
    │  parseRange / parseCards                       (range.hpp, card.hpp)
    ▼
 Ranges of hands, CardMask bitsets (one bit per card)
@@ -665,6 +670,13 @@ twice) combined with every board:
   threads. `exactShowdowns()` computes that count up front (stopping once it passes a limit, since
   counting the deals of wide ranges takes time too), which is how the CLI chooses a method: exact
   up to 200 million showdowns, Monte Carlo beyond.
+- **A limit on deals:** so that threads can take tasks by number, the deals are listed in memory
+  before any board is enumerated, at 88 bytes each. Three random hands preflop have about 1.8
+  billion deals, a 160 GB list, and asking for that exactly used to crash: the browser test found
+  it in step 8. Now the deals are counted first, stopping just past `kMaxExactDeals` (2²² ≈ 4.2
+  million, a list of about 370 MB), and bigger spots get the error `kTooManyDeals`, which says to
+  use Monte Carlo. `exactShowdowns()` returns "more than any limit" for them, so the automatic
+  choice always picks Monte Carlo. Spots under the limit behave exactly as before.
 
 ### Monte Carlo: rejection sampling
 
@@ -699,11 +711,167 @@ rare or symmetric. Without a test aimed at the bias, the bug would have gone unn
 |---|---|
 | AA against one random hand, exact | Wins, losses and draws (ours for A♠A♥, × 6 for the 6 AA hands) equal the [Wizard of Odds' exhaustive table](https://wizardofodds.com/games/texas-hold-em/2-player-game/) **exactly**: 10,689,050,508 / 1,827,970,020 / 68,413,872 (an opt-in test, about 10 s) |
 | AA and 72o against random, Monte Carlo | within 4 standard errors of the same table |
-| AA vs KK range | exactly 6 × (1·c₂ + 4·c₁ + 1·c₀), where c₂, c₁, c₀ are the known-hand results for 2, 1 and 0 shared suits (section 8), as suit symmetry requires: 81.95% / 18.05% |
+| AA vs KK range | exactly 6 × (1·c₂ + 4·c₁ + 1·c₀), where c₂, c₁, c₀ are the known-hand results for 2, 1 and 0 shared suits (section 11), as suit symmetry requires: 81.95% / 18.05% |
 | AKs vs QQ range | exactly 12 × (shares a suit + shares none): 46.05% / 53.95% |
 | One-hand ranges | the same counts *and errors* as the HoleCards versions |
 
-## 8. Testing approach
+## 8. The calculator layer and the command-line tool
+
+The command-line tool and the web page need the same steps: read ranges and cards typed as text,
+decide between exact enumeration and Monte Carlo, run it, and describe the result. `calculate()`
+(`calculator.hpp`) does all of that once, so both front ends stay thin. `main.cpp` only reads
+arguments and prints, and the WebAssembly binding only converts a JavaScript object. Because they
+call the same function and use the same JSON writer, they can't give different answers.
+
+```cpp
+CalculationRequest request;            // ranges, board, dead, method, exactLimit, trials, seed, threads
+request.ranges = {"QQ+, AKs", "JJ-99"};
+request.board = "Ah 7d 2c";
+auto outcome = poker::calculate(request);  // std::variant<CalculationReport, CalculationError>
+```
+
+- **Errors say which input is wrong:** a range (and whose), the board, the dead cards, or the
+  "setup" (too few players, a card used twice, ...). The page uses that to put the message next to
+  the right box.
+- **Choosing the method:** `exactShowdowns()` counts the showdowns enumeration would take, and
+  stops counting once it passes the limit, since counting the deals of wide ranges takes time too.
+  The limit is part of the request: 200 million for the CLI, which uses every core (about a
+  second), and 10 million in the browser, which uses one (also about a second).
+- **The core library is untouched:** the calculator layer allocates strings and vectors, which is
+  fine at the edge of the program. The hot paths underneath it still allocate nothing.
+
+### Writing JSON by hand
+
+The core library uses only the standard library, and writing JSON (unlike reading it) takes just two
+details to get right:
+
+1. **Escaping:** user input like `AK"x` ends up in error messages, so quotes, backslashes and control
+   characters are escaped. A test feeds in all three and checks the exact output.
+2. **Numbers:** `std::to_chars` writes the shortest text that reads back as *exactly* the same
+   `double` (`0.1`, not `0.1000000000000000055511151231257827`), so JavaScript gets the same value
+   the C++ computed. JSON has no infinity, so a margin that can't be estimated (fewer than 2
+   trials) is written as `null`.
+
+### Testing the CLI as a program
+
+Unit tests call `calculate()` directly and check that it returns the library's results unchanged.
+The real `poker_cli` executable gets 14 end-to-end tests that check its exit code *and* its output.
+Plain CTest can check one or the other but not both (a `PASS_REGULAR_EXPRESSION` makes it ignore
+the exit code), so a small script, `tests/run_cli.cmake`, runs the program and checks both. Before
+replacing the old `main.cpp`, I compared the old and new programs' output on 23 commands: every
+successful run printed the same numbers and layout.
+
+## 9. WebAssembly
+
+[Emscripten](https://emscripten.org) compiles C++ to WebAssembly, a portable binary format that
+browsers (and Node.js) compile to machine code when they load it. The library needed no changes:
+it is standard C++ with no CPU-specific flags, it already passed every test as a 32-bit build
+(`size_t` is 32 bits in WebAssembly too), and WebAssembly has 64-bit integers, so `CardMask` stays a
+single register.
+
+### Two builds
+
+| Build | Contents | Threads | Run by |
+|---|---|---|---|
+| `-DPOKER_WASM_THREADS=ON` | the whole test suite, the CLI, the benchmarks | yes (pthreads) | Node.js |
+| default | the library plus a JavaScript binding: `poker_wasm.js` + `poker_wasm.wasm` | no | browsers |
+
+WebAssembly threads share one block of memory, a `SharedArrayBuffer`, and browsers only allow those
+on pages served with two special HTTP headers (COOP and COEP, which isolate the page from other
+sites). Static hosts like GitHub Pages can't send them, and a module built with thread support
+needs `SharedArrayBuffer` even to run on one thread. So the browser module is built without
+threads, while the tests run with threads under Node.js, which allows `SharedArrayBuffer`. All 178
+tests pass as WebAssembly, the multithreading tests (up to 64 threads) included.
+
+**`PROXY_TO_PTHREAD`:** in WebAssembly a thread is a Web Worker, and a new one only starts once
+JavaScript's main thread gets back to its event loop. If `main()` ran on that main thread and
+waited for its threads (as `runInParallel` does), they would never start, and it would wait
+forever. This link option runs `main()` on a worker thread instead, leaving the main thread free.
+
+### The binding
+
+`wasm/bindings.cpp` uses Emscripten's embind to give JavaScript one function:
+
+```js
+const poker = await createPokerModule();
+JSON.parse(poker.calculate({ ranges: ["QQ+, AKs", "random"], board: "Js Ts 2h" }));
+```
+
+It takes a plain object and returns the same JSON as `poker_cli --json`. It checks every field's
+type first, so a request of the wrong shape is a JSON error, not a crash. JavaScript numbers are
+doubles, so `trials` and `seed` must be whole numbers from 0 to 2⁵³ (the largest a double holds
+exactly), and `NaN` is caught by writing the check so that every comparison with it fails.
+
+### The same numbers on every platform
+
+The browser module reproduces the native build's results **bit for bit**, Monte Carlo included, and
+its smoke test (`wasm/smoke_test.mjs`) demands exact equality with numbers from the native CLI:
+
+- exact results are ratios of whole-number counts, computed with the same IEEE operations
+  everywhere;
+- Monte Carlo uses the project's own random numbers (`mt19937_64`'s raw output, `uniformBelow`,
+  `mixSeed`), which are specified bit for bit, unlike `std::uniform_int_distribution`.
+
+Changing one expected value in its last digit makes the smoke test fail, so it really does compare
+every digit.
+
+### Speed and size
+
+WebAssembly runs at about 70–90% of native speed here (README, Benchmarks), because the hot loop
+is 64-bit integer arithmetic and table lookups, which WebAssembly supports directly, and Node's
+engine (V8) compiles it to machine code. The naive evaluator is even 30% faster as WebAssembly. That
+isn't a WebAssembly advantage: Emscripten uses Clang (LLVM), which optimises that code better than
+MSVC does.
+
+The module is 173 KB of WebAssembly plus 27 KB of JavaScript. The fast evaluator's 330 KB of lookup
+tables aren't downloaded: the browser builds them from the naive evaluator when it starts, in
+about 9 ms.
+
+## 10. The web page
+
+Plain HTML, CSS and JavaScript (`web/`), with no framework and no build step: about 230 KB in all,
+module included.
+
+- **A Web Worker:** a calculation blocks the thread it runs on until it finishes, and on the page's
+  main thread that would freeze the page. So the module runs in a worker (`web/worker.js`), and the
+  page sends it requests and gets JSON back as messages.
+- **Stopping:** a running WebAssembly function can't be interrupted from outside, so **Stop**
+  terminates the worker (which ends its thread at once) and starts a fresh one. The same happens if
+  the module ever aborts.
+- **Shareable links:** the inputs are kept in the address bar
+  (`?p=QQ%2B%2C+AKs&p=JJ-99&board=Ah+7d+2c`), and opening such a link calculates that spot.
+- **Safe with any input:** everything typed is shown with `textContent`, never `innerHTML`, so a
+  "range" like `<img src=x onerror=...>` is displayed as text instead of becoming markup that runs
+  a script.
+- **Accessible:** every input has a label; errors are linked to their input (`aria-describedby`,
+  `aria-invalid`), and the input gets the focus; the status and results are announced to screen
+  readers (`role="status"`, `aria-live`).
+- **Phones:** at narrow widths the Player and Hands columns are hidden and the margin wraps, so the
+  equity column stays visible.
+
+### How it's tested
+
+- `web/worker_test.mjs` runs `worker.js` in Node.js with a stand-in for the worker's global scope and
+  checks its messages, including the crash path.
+- `web/browser_test.mjs` tests the page itself in headless Chrome. It starts Chrome with its
+  DevTools protocol turned on (the JSON-over-WebSocket interface Chrome's developer tools use), then
+  types, clicks and reads the page like a user would. It checks results, errors, Stop, the player
+  limit, the phone layout, that markup in an input never becomes elements, and that the browser
+  console shows no errors or warnings. It runs in CI on every push.
+- These tests found three real problems while the page was being built. Exact enumeration of three
+  random hands crashed the module, a bug in the library since step 7 that the CLI had too (section
+  7, "A limit on deals"). The results table hid its Equity column on phones. And the equity and its
+  margin had no real space between them (it was only CSS margin), so screen readers and copy-paste
+  ran them together. Replacing `textContent` with
+  `innerHTML` makes the test fail at once, with "markup became an element".
+
+### Deployment
+
+CI builds the site and uploads it on every run, so a pull request's version can be downloaded and
+tried. On `main`, a final job publishes it with GitHub Pages, but only after every other job
+(native, sanitizers, WebAssembly, formatting) has passed.
+
+## 11. Testing approach
 
 - **Reference values**, checked to the published two decimals:
   - AsAh vs KsKh: 82.36 / 17.09 / 0.54 tie
@@ -733,7 +901,7 @@ on MSVC and GCC. With raw output, the benchmark's "1M random hands" are identica
 and GCC builds print the same checksum. Monte Carlo relies on the same property: for a given seed it
 deals the same boards, and prints the same numbers, on every platform.
 
-## 9. Build and tooling notes
+## 12. Build and tooling notes
 
 - **Sanitizers:** `add_compile_options()` only affects targets created *after* it. The original
   `CMakeLists.txt` added the sanitizer flags after `add_library(poker)`, so the library itself was
@@ -744,16 +912,19 @@ deals the same boards, and prints the same numbers, on every platform.
 - Warnings: the library builds cleanly with `/W4` (MSVC) and with
   `-Wall -Wextra -Wpedantic -Wconversion -Wshadow -Wsign-conversion` (GCC 15).
 - **No CPU-specific flags:** the builds don't use `-march=native`, `-mpopcnt` or similar, so the
-  binaries run on any x86-64 CPU (and the code stays ready for WebAssembly). The price is that
+  binaries run on any x86-64 CPU (and the code compiled to WebAssembly unchanged). The price is that
   `std::popcount` can be a library call, which is why the fast evaluator avoids it in its hot path.
 - **32-bit builds:** everything also builds warning-free and passes all tests as 32-bit (Win32),
-  where `size_t` is 32 bits, as it will be for WebAssembly's wasm32 target.
+  where `size_t` is 32 bits, as it is in WebAssembly.
+- **Emscripten on Windows** needs the Ninja generator (`-G Ninja`). GoogleTest 1.15 gives one warning
+  with Emscripten 7's Clang (`-Wcharacter-conversion` in its own `gtest-printers.h`); our code has
+  none.
 - **ThreadSanitizer in CI:** recent Ubuntu kernels randomise memory addresses with more bits than
   TSan's memory layout expects, which can make TSan programs abort at startup ("unexpected memory
   mapping"). The CI job lowers the setting first (`sysctl vm.mmap_rnd_bits=28`), the usual
   workaround.
 
-## 10. Quick answers to likely interview questions
+## 13. Quick answers to likely interview questions
 
 - **Why a bitmask instead of `std::vector<Card>`?** Set operations become single instructions, there
   is no allocation, and a whole hand fits in one register.
@@ -829,3 +1000,28 @@ deals the same boards, and prints the same numbers, on every platform.
 - **What would you do next for speed?** Division-free random numbers for Monte Carlo (Lemire's
   method) and reusing the board's work across players in enumeration, always testing against the
   reference implementations.
+- **Why a separate calculator layer?** The CLI and the web page need the same logic between text
+  input and the library: parsing, choosing the method, reporting errors. Putting it in one tested
+  function keeps both front ends thin, and they can't disagree because they share it and its JSON
+  writer.
+- **How do you know the browser gives the same answers as the CLI?** The whole test suite runs as
+  WebAssembly, and the browser module's smoke test compares its results with the native build's to
+  the last digit, Monte Carlo included. That's possible because exact results are ratios of
+  integers and the random numbers are our own, specified bit for bit.
+- **Why two WebAssembly builds?** Threads need `SharedArrayBuffer`, which browsers only allow on
+  pages served with special headers that GitHub Pages can't send. So the tests run with threads
+  under Node.js, and the browser gets a single-threaded build in a Web Worker.
+- **How do you stop a long calculation in the browser?** You can't interrupt a running WebAssembly
+  function from outside, so the page terminates its worker and starts a new one. Running in a
+  worker is also what keeps the page responsive meanwhile.
+- **How fast is WebAssembly?** About 70–90% of native here, measured on the same benchmarks, since
+  the hot loop is integer arithmetic and table lookups. The browser's real handicap is having one
+  thread instead of sixteen.
+- **How do you test a web page without a test framework?** Through Chrome's DevTools protocol:
+  start headless Chrome, connect to its WebSocket, and run JavaScript in the page to type, click
+  and read. Node 24 has `WebSocket` and `fetch` built in, so the test needs no dependencies.
+- **Did the page's tests find anything?** Yes, three things. Forcing exact enumeration of three
+  random hands crashed: the library listed all 1.8 billion deals (160 GB) in memory first, a bug
+  the CLI had too. It now counts them first and refuses over 4.2 million with a clear error. On
+  phones, the results table hid its most important column. And the equity and its margin had no
+  real space between them (only CSS margin), so screen readers ran them together.

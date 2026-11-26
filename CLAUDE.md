@@ -25,14 +25,26 @@ Debug with sanitizers: `cmake -S . -B build-debug -DCMAKE_BUILD_TYPE=Debug -DPOK
 (ASan + UBSan on GCC/Clang; ASan only on MSVC). On Windows with the Visual Studio generator, pass
 `--config Release` to the build and `-C Release` to ctest; see README.md.
 
+WebAssembly (Emscripten 7.0.1, activated with `emsdk_env`; add `-G Ninja` on Windows):
+```bash
+emcmake cmake -S . -B build-wasm-threads -DCMAKE_BUILD_TYPE=Release -DPOKER_WASM_THREADS=ON
+cmake --build build-wasm-threads --parallel && ctest --test-dir build-wasm-threads   # suite, in Node
+emcmake cmake -S . -B build-wasm -DCMAKE_BUILD_TYPE=Release
+cmake --build build-wasm --parallel && ctest --test-dir build-wasm   # module, worker, page (Chrome)
+```
+The browser build assembles the web page in `build-wasm/site`; serve that folder to try it.
+
 Always run the build and the full test suite after a change, and fix warnings: the library is
-compiled with `-Wall -Wextra -Wpedantic -Wconversion -Wshadow`.
+compiled with `-Wall -Wextra -Wpedantic -Wconversion -Wshadow`. After changing `web/` or `wasm/`,
+also run both WebAssembly builds' tests.
 
 ## Layout
 - `include/poker/` — public headers (namespace `poker`)
 - `src/` — library implementation + `main.cpp` (CLI)
 - `tests/` — GoogleTest unit tests (fetched via CMake FetchContent)
 - `bench/` — benchmark executable(s), plain `std::chrono`, no external deps
+- `wasm/` — the browser module's JavaScript binding (embind) and its Node smoke test
+- `web/` — the web page: plain HTML/CSS/JS, a Web Worker, and their tests (Node, headless Chrome)
 - `docs/` — design notes, benchmark results
 
 ## Conventions
@@ -62,6 +74,16 @@ compiled with `-Wall -Wextra -Wpedantic -Wconversion -Wshadow`.
   as the HoleCards API. Keep a range's hands in canonical order (so seeded results don't depend on
   how the range was written), and deal Monte Carlo hands by rejection sampling of the whole deal:
   never redraw only the colliding player, which is biased (see `EveryValidDealIsEquallyLikely`).
+- Front ends go through `calculate()` (`calculator.hpp`): the CLI and the WebAssembly binding only
+  convert input and output, and both use its `toJson()`, so they can't disagree. New options go
+  into `CalculationRequest`, with unit tests and, for the CLI, an end-to-end `poker_cli_test()`.
+- WebAssembly: the browser module is single-threaded (threads would need COOP/COEP headers that
+  GitHub Pages can't send) and runs in a Web Worker. Its results must match the native build to
+  the last digit; `wasm/smoke_test.mjs` holds native reference values, so regenerate them with
+  `poker_cli ... --json` if a result legitimately changes.
+- The web page shows user input with `textContent`, never `innerHTML` (`web/browser_test.mjs`
+  checks this). No frameworks or build step; new page files go into `POKER_WEB_FILES` in
+  CMakeLists.txt.
 - Add new source files to `CMakeLists.txt` explicitly (no globbing).
 - Small, focused commits with descriptive messages.
 
@@ -73,4 +95,4 @@ compiled with `-Wall -Wextra -Wpedantic -Wconversion -Wshadow`.
 5. ✅ Fast evaluator (lookup tables / perfect hashing) — benchmark vs naive
 6. ✅ Multithreaded Monte Carlo (and exact enumeration)
 7. ✅ Range parsing (`AKs, QQ+, A5s-A2s, 22+`) and range-vs-range equity
-8. CLI polish, then WebAssembly build + web frontend
+8. ✅ CLI polish, then WebAssembly build + web frontend (version 1.0.0)

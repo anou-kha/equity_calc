@@ -54,11 +54,70 @@ jobs:
         env:
           TSAN_OPTIONS: halt_on_error=1  # fail at the first race report
 
+  # The library compiled to WebAssembly with Emscripten, run by Node.js: the whole test suite (in
+  # a build with threads), then the single-threaded browser module's smoke test. See the
+  # WebAssembly section in CMakeLists.txt for why there are two builds.
+  webassembly:
+    runs-on: ubuntu-latest
+    env:
+      EMSDK_VERSION: 7.0.1  # the Emscripten version, pinned so builds are reproducible
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Emscripten
+        run: |
+          git clone --depth 1 https://github.com/emscripten-core/emsdk.git "$RUNNER_TEMP/emsdk"
+          "$RUNNER_TEMP/emsdk/emsdk" install "$EMSDK_VERSION"
+          "$RUNNER_TEMP/emsdk/emsdk" activate "$EMSDK_VERSION"
+
+      - name: Tests, CLI and benchmarks, with threads
+        run: |
+          source "$RUNNER_TEMP/emsdk/emsdk_env.sh"
+          emcmake cmake -S . -B build-wasm-threads -DCMAKE_BUILD_TYPE=Release \
+            -DPOKER_WASM_THREADS=ON
+          cmake --build build-wasm-threads --parallel
+          ctest --test-dir build-wasm-threads --output-on-failure
+
+      # Also builds the web page into build-wasm/site and tests it in headless Chrome.
+      - name: Browser module and web page
+        run: |
+          source "$RUNNER_TEMP/emsdk/emsdk_env.sh"
+          emcmake cmake -S . -B build-wasm -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-wasm --parallel
+          ctest --test-dir build-wasm --output-on-failure
+
+      # The finished site, as the artifact GitHub Pages deploys (and anyone can download from the
+      # run's page to try a pull request's version).
+      - name: Upload the web page
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: build-wasm/site
+
+  # Publishes the web page with GitHub Pages: only for pushes to main, and only once every other
+  # job has passed.
+  deploy-web-page:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [build-and-test, thread-sanitizer, webassembly, format]
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write     # to deploy to GitHub Pages
+      id-token: write  # to prove the deployment comes from this repository's workflow
+    concurrency:
+      group: github-pages
+      cancel-in-progress: false  # let a deployment in progress finish
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5
+
   format:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Check formatting
         run: |
-          find include src tests bench -name '*.hpp' -o -name '*.cpp' \
+          find include src tests bench wasm -name '*.hpp' -o -name '*.cpp' \
             | xargs clang-format --dry-run --Werror
