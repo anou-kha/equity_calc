@@ -112,6 +112,25 @@ PotShares showdown(CardMask board, std::span<const CardMask> holes) {
   return shares;
 }
 
+// Every counter is updated on every board, by 0 or 1, so the memory written never depends on who
+// won. A first version did ++counts[winner].wins instead: the address it wrote depended on a
+// comparison of two slow evaluations, which made Monte Carlo, where outcomes are random, 37%
+// slower than the general showdown(), while exact enumeration still got faster. This version is
+// faster in both (docs/design.md, section 4).
+void addHeadsUpShowdown(CardMask board, const Seats& seats, std::span<PlayerResult, 2> counts) {
+  const HandRank first = evaluate(board | seats.holes[0]);
+  const HandRank second = evaluate(board | seats.holes[1]);
+  const uint64_t firstWins = first > second;
+  const uint64_t secondWins = second > first;
+  const uint64_t tie = first == second;
+  counts[0].wins += firstWins;
+  counts[1].wins += secondWins;
+  counts[0].ties += tie;
+  counts[1].ties += tie;
+  counts[0].tieShares += tie * (kPotUnits / 2);
+  counts[1].tieShares += tie * (kPotUnits / 2);
+}
+
 void addToCounts(const PotShares& shares, std::span<PlayerResult> counts) {
   for (size_t i = 0; i < counts.size(); ++i) {
     if (shares[i] == kPotUnits) {

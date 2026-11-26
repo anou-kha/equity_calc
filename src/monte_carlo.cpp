@@ -176,15 +176,30 @@ std::variant<MonteCarloResult, EquityError> monteCarloEquity(std::span<const Ran
         const auto rng = std::make_unique<Rng>(mixSeed(options.seed, chunk));
         detail::Deck deck = startingDeck;
         const std::span<PlayerResult> counts(totals.players.data(), numPlayers);
-        for (uint64_t trial = 0; trial < trials; ++trial) {
-          detail::Seats seats = knownSeats;
-          const CardMask dealtHoleCards = dealHands(hands, sampled, knownHoleCards, *rng, seats);
-          const CardMask fullBoard = dealRandomBoard(deck, missing, board, dealtHoleCards, *rng);
-          const detail::PotShares shares = detail::showdown(fullBoard, seats.holeMasks());
-          detail::addToCounts(shares, counts);
-          for (size_t i = 0; i < numPlayers; ++i) {
-            totals.squaredPotUnits[i] += shares[i] * shares[i];
+        // One loop per scorer: `score` is a template parameter of this generic lambda, so the
+        // compiler builds a separate loop for each. Testing for heads-up inside a single loop
+        // made the general (3+ player) loop measurably slower, although its code hadn't changed.
+        const auto playTrials = [&](const auto& score) {
+          for (uint64_t trial = 0; trial < trials; ++trial) {
+            detail::Seats seats = knownSeats;
+            const CardMask dealtHoleCards = dealHands(hands, sampled, knownHoleCards, *rng, seats);
+            const CardMask fullBoard = dealRandomBoard(deck, missing, board, dealtHoleCards, *rng);
+            score(fullBoard, seats);
           }
+        };
+        if (numPlayers == 2) {
+          // Heads-up: the squared pot units are derived from the counts after the loop.
+          playTrials([&](CardMask fullBoard, const detail::Seats& seats) {
+            detail::addHeadsUpShowdown(fullBoard, seats, counts.first<2>());
+          });
+        } else {
+          playTrials([&](CardMask fullBoard, const detail::Seats& seats) {
+            const detail::PotShares shares = detail::showdown(fullBoard, seats.holeMasks());
+            detail::addToCounts(shares, counts);
+            for (size_t i = 0; i < numPlayers; ++i) {
+              totals.squaredPotUnits[i] += shares[i] * shares[i];
+            }
+          });
         }
         totals.trials += trials;
       });
@@ -199,6 +214,16 @@ std::variant<MonteCarloResult, EquityError> monteCarloEquity(std::span<const Ran
       result.squaredPotUnits[i] += totals.squaredPotUnits[i];
     }
     result.counts.boards += totals.trials;
+  }
+  if (numPlayers == 2) {
+    // The only nonzero shares heads-up are a whole pot and a half pot. Their frequencies give
+    // the same sum of squares as accumulating each trial's share squared.
+    constexpr uint64_t halfPot = kPotUnits / 2;
+    for (size_t i = 0; i < 2; ++i) {
+      const PlayerResult& player = result.counts.players[i];
+      result.squaredPotUnits[i] =
+          player.wins * (kPotUnits * kPotUnits) + player.ties * (halfPot * halfPot);
+    }
   }
   return result;
 }

@@ -375,6 +375,43 @@ Interestingly, with the naive evaluator, enumeration evaluated about 15 M hands/
 similar, so the CPU's branch predictor guessed the evaluator's branches well, whereas random hands
 defeat it.
 
+### A heads-up fast path, and two ways it went wrong
+
+Most spots are heads-up, and there scoring a board is simpler than the general `showdown()`, which
+finds the best rank, counts how many players share it and divides the pot. With two players it's
+two evaluations and one comparison: `addHeadsUpShowdown()` adds the result straight into the
+counters, and Monte Carlo derives each player's sum of squared pot units at the end
+(wins × 2520² + ties × 1260²), since those are the only shares possible. `showdown()` stays the
+general version for three or more players and the reference in tests (`test_heads_up.cpp`): on
+4,096 random boards, split pots and a board that plays, and a seeded range run whose expected
+counts come from the old code (the test also passes on the code from before the fast path). The
+2.1-billion-showdown Wizard of Odds check still matches exactly.
+
+The first version (by Codex) was 37% *slower* for Monte Carlo, while exact enumeration got faster.
+It updated the winner's counter with `++counts[winner].wins`, which compiles to
+`inc qword ptr [rax+rbx]`: the address written depends on comparing two slow evaluations. In exact
+enumeration the boards come in order, the same player wins long runs of them, and the CPU
+predicts well; in Monte Carlo every board is random. The fix adds 0 or 1 to *every* counter on
+every board, so the addresses written never change (the comparisons become `setg`/`sete`).
+
+That version was faster heads-up, but the 3-player Monte Carlo row, whose code hadn't changed,
+became about 3% slower: slower in all 7 of 7 alternating pairs. The heads-up test was inside the
+shared trial loop, which changed how the compiler laid that loop out. Choosing the scorer once,
+before the loop, fixed it: a generic lambda (`[&](const auto& score)`) called with each scorer
+makes the compiler build one loop per scorer. Exact enumeration chooses once per task, likewise.
+
+| Release `poker_bench`, median of 7 alternating pairs | Before | After |
+|---|---:|---:|
+| Exact AsAh vs KsKh, preflop | 72.8 ms | 55.4 ms (−24%) |
+| Exact AA vs KK as ranges (61.6M showdowns, 16 threads) | 379.1 ms | 302.9 ms (−20%) |
+| Monte Carlo AsAh vs KsKh, 1M trials | 75.3 ms | 66.4 ms (−12%) |
+| Monte Carlo, every pot split | 39.0 ms | 28.9 ms (−26%) |
+| Monte Carlo QQ+, AKs vs random, 10M trials | 142.9 ms | 131.3 ms (−8%) |
+| Monte Carlo, three players (control) | 93.8 ms | 92.5 ms (noise) |
+
+Exact enumeration on a flop gains only about 2%: each board is then so cheap that rebuilding the
+remaining deck for every one of them dominates, which is the next thing to optimise.
+
 ## 5. Monte Carlo equity
 
 `monteCarloEquity(players, board, dead, {.trials = N, .seed = S})` deals N random completions of the
@@ -1105,3 +1142,11 @@ deals the same boards, and prints the same numbers, on every platform.
   view into a temporary that dies before the loop body runs (until C++23), so the loop reads freed
   memory. A test of mine did that; it showed up as 525 garbage hands, and the fix is to store the
   range in a variable first.
+- **Tell me about an optimisation that backfired.** A heads-up fast path made exact enumeration
+  24% faster but Monte Carlo 37% slower. The disassembly showed why: `++counts[winner].wins`
+  writes to an address that depends on who won, which the CPU handles well when the same player
+  wins runs of boards (enumeration) and badly when every board is random (Monte Carlo). Adding 0
+  or 1 to both counters fixed it. Then an unchanged 3-player loop was 3% slower in 7 of 7 runs,
+  because the heads-up test sat inside the shared loop; deciding once, before the loop, fixed
+  that too. Both were only found by measuring every row, including a control that shouldn't
+  change.

@@ -187,13 +187,22 @@ std::variant<EquityResult, EquityError> exactEquity(std::span<const Range> playe
         CardMask prefixCards = 0;
         for (size_t i = 0; i < prefix.length; ++i) prefixCards |= deck.cards[prefix.positions[i]];
 
+        // Choose the scorer once per task, not once per board, so each gets its own loop (as in
+        // monte_carlo.cpp, where a per-board test slowed the 3+ player loop down).
         const std::span<PlayerResult> counts(totals.players.data(), numPlayers);
-        forEachCombination(deck, missing - prefixLength, prefix.next, board | prefixCards,
-                           [&](CardMask fullBoard) {
-                             detail::addToCounts(detail::showdown(fullBoard, deal.holeMasks()),
-                                                 counts);
-                             ++totals.boards;
-                           });
+        const CardMask start = board | prefixCards;
+        const size_t toDeal = missing - prefixLength;
+        if (numPlayers == 2) {
+          forEachCombination(deck, toDeal, prefix.next, start, [&](CardMask fullBoard) {
+            detail::addHeadsUpShowdown(fullBoard, deal, counts.first<2>());
+            ++totals.boards;
+          });
+        } else {
+          forEachCombination(deck, toDeal, prefix.next, start, [&](CardMask fullBoard) {
+            detail::addToCounts(detail::showdown(fullBoard, deal.holeMasks()), counts);
+            ++totals.boards;
+          });
+        }
       });
 
   EquityResult result;
