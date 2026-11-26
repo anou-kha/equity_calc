@@ -145,6 +145,50 @@ check("requests of the wrong shape are errors, not crashes", () => {
   assert.equal(calculate({ ranges: ["AsKs", "QhQd"], board: "Js Ts 2h" }).ok, true);
 });
 
+check("parseRange gives the standard text and every hand", () => {
+  const range = JSON.parse(poker.parseRange("AKs, QQ+"));
+  assert.equal(range.ok, true);
+  assert.equal(range.text, "QQ+, AKs");
+  assert.equal(range.hands.length, 22);
+  const aks = JSON.parse(poker.parseRange("AKs")).hands;
+  assert.deepEqual(aks, [[48, 44], [49, 45], [50, 46], [51, 47]]);  // AcKc, AdKd, AhKh, AsKs
+
+  const bad = JSON.parse(poker.parseRange("QQ+, AKx"));
+  assert.equal(bad.ok, false);
+  assert.match(bad.message, /at "AKx"/);
+});
+
+check("formatRange turns hands back into notation", () => {
+  // Three of the four AKs hands are no longer the whole class, so they're listed one by one.
+  const allFour = [[51, 47], [50, 46], [49, 45], [48, 44]];
+  assert.equal(JSON.parse(poker.formatRange(allFour)).text, "AKs");
+  assert.equal(JSON.parse(poker.formatRange([[51, 47], [50, 46], [49, 45]])).text,
+               "AsKs, AhKh, AdKd");
+  assert.equal(JSON.parse(poker.formatRange([[47, 51]])).text, "AsKs");  // either card first
+  assert.deepEqual(JSON.parse(poker.formatRange([])), { ok: true, text: "", hands: [] });
+
+  for (const text of ["QQ+, AKs", "JJ-99, ATs+, KQo", "random", "22+, A2s+, K9s+, AhKd"]) {
+    const range = JSON.parse(poker.parseRange(text));
+    assert.equal(JSON.parse(poker.formatRange(range.hands)).text, range.text, text);
+  }
+});
+
+check("formatRange rejects hands of the wrong shape", () => {
+  for (const hands of [undefined, "AsKs", [51, 47], [[51]], [[51, 51]], [[52, 0]], [[1.5, 3]],
+                       [["As", "Ks"]], [[51, 47, 3]]]) {
+    const result = JSON.parse(poker.formatRange(hands));
+    assert.equal(result.ok, false, JSON.stringify(hands));
+    assert.match(result.message, /^request: formatRange\(\) takes an array of hands/);
+  }
+});
+
+check("parseCards reads cards in order", () => {
+  assert.deepEqual(JSON.parse(poker.parseCards("jsTS2h")),
+                   { ok: true, text: "Js Ts 2h", cards: [39, 35, 2] });
+  assert.deepEqual(JSON.parse(poker.parseCards("")), { ok: true, text: "", cards: [] });
+  assert.equal(JSON.parse(poker.parseCards("As As")).ok, false);
+});
+
 if (failures > 0) {
   console.log(`${failures} check(s) failed`);
   process.exit(1);

@@ -27,6 +27,14 @@ CalculationError makeError(Field field, std::string message, size_t player = 0) 
   return CalculationError{field, player, std::move(message)};
 }
 
+// 'invalid range "QQ+, AKx" at "AKx": the last letter must be ...' (the entry only if it isn't
+// the whole range).
+std::string rangeErrorMessage(std::string_view text, const RangeError& error) {
+  std::string message = "invalid range \"" + std::string(text) + "\"";
+  if (error.token != text) message += " at \"" + error.token + "\"";
+  return message + ": " + std::string(error.reason);
+}
+
 std::string cardsToString(const std::vector<Card>& cards) {
   std::string text;
   for (const Card card : cards) {
@@ -137,9 +145,7 @@ std::variant<CalculationReport, CalculationError> calculate(const CalculationReq
     const std::string& text = request.ranges[player];
     const auto parsed = parseRange(text);
     if (const auto* rangeError = std::get_if<RangeError>(&parsed)) {
-      std::string message = "invalid range \"" + text + "\"";
-      if (rangeError->token != text) message += " at \"" + rangeError->token + "\"";
-      return makeError(Field::kRange, message + ": " + std::string(rangeError->reason), player);
+      return makeError(Field::kRange, rangeErrorMessage(text, *rangeError), player);
     }
     ranges.push_back(std::get<Range>(parsed));
   }
@@ -259,6 +265,64 @@ std::string toJson(const CalculationError& error) {
   appendKey(out, "message");
   appendString(out, error.message);
   out += '}';
+  return out;
+}
+
+std::string rangeJson(std::string_view text) {
+  const auto parsed = parseRange(text);
+  if (const auto* error = std::get_if<RangeError>(&parsed)) {
+    std::string out = "{";
+    appendKey(out, "ok");
+    out += "false";
+    appendKey(out, "message");
+    appendString(out, rangeErrorMessage(text, *error));
+    out += '}';
+    return out;
+  }
+  return rangeJson(std::get<Range>(parsed));
+}
+
+std::string cardsJson(std::string_view text) {
+  const std::optional<std::vector<Card>> cards = parseCards(text);
+  std::string out = "{";
+  appendKey(out, "ok");
+  if (!cards) {
+    out += "false";
+    appendKey(out, "message");
+    appendString(out, "invalid cards: " + std::string(text));
+    out += '}';
+    return out;
+  }
+  out += "true";
+  appendKey(out, "text");
+  appendString(out, cardsToString(*cards));
+  appendKey(out, "cards");
+  out += '[';
+  for (const Card card : *cards) {
+    if (out.back() != '[') out += ',';
+    appendNumber(out, uint64_t{static_cast<unsigned>(card.index())});
+  }
+  out += "]}";
+  return out;
+}
+
+std::string rangeJson(const Range& range) {
+  std::string out = "{";
+  appendKey(out, "ok");
+  out += "true";
+  appendKey(out, "text");
+  appendString(out, formatRange(range));
+  appendKey(out, "hands");
+  out += '[';
+  for (const HoleCards& hand : range.combos()) {  // each with its higher card first
+    if (out.back() != '[') out += ',';
+    out += '[';
+    appendNumber(out, uint64_t{static_cast<unsigned>(hand[0].index())});
+    out += ',';
+    appendNumber(out, uint64_t{static_cast<unsigned>(hand[1].index())});
+    out += ']';
+  }
+  out += "]}";
   return out;
 }
 

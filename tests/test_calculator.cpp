@@ -284,6 +284,39 @@ TEST(CalculatorJson, ErrorsEscapeUserInput) {
       R"({"ok":false,"field":"setup","player":null,"message":"at least 2 players are needed"})");
 }
 
+// ---- Range pickers ------------------------------------------------------------------------------
+
+TEST(CalculatorRanges, RangeJsonHasTheTextAndEveryHand) {
+  // AcKc, AdKd, AhKh, AsKs: card index = rank * 4 + suit, the higher card first.
+  EXPECT_EQ(poker::rangeJson("AKs"),
+            R"({"ok":true,"text":"AKs","hands":[[48,44],[49,45],[50,46],[51,47]]})");
+  EXPECT_EQ(poker::rangeJson("KhAh"), R"({"ok":true,"text":"AhKh","hands":[[50,46]]})");
+  EXPECT_EQ(poker::rangeJson(poker::Range{}), R"({"ok":true,"text":"","hands":[]})");
+
+  const std::string all = poker::rangeJson(" any ");
+  EXPECT_NE(all.find(R"("text":"random")"), std::string::npos);
+  EXPECT_EQ(std::count(all.begin(), all.end(), '[') - 1, 1326);  // one [ per hand, plus the list's
+}
+
+TEST(CalculatorRanges, UnreadableRangesGiveTheSameMessageAsCalculate) {
+  const std::string json = poker::rangeJson("QQ+, AKx");
+  const CalculationError fromCalculate = error(request({"AsKs", "QQ+, AKx"}));
+  // (A custom raw-string delimiter, because the text itself contains `)"`.)
+  EXPECT_EQ(json, R"json({"ok":false,"message":"invalid range \"QQ+, AKx\" at \"AKx\": )json"
+                  R"json(the last letter must be 's' (suited) or 'o' (offsuit)"})json");
+  EXPECT_EQ(fromCalculate.message,
+            "invalid range \"QQ+, AKx\" at \"AKx\": the last letter must be 's' (suited) or 'o' "
+            "(offsuit)");
+}
+
+TEST(CalculatorCards, CardsJsonKeepsTheOrderAndNormalisesTheText) {
+  // Js = 9 * 4 + 3, Ts = 8 * 4 + 3, 2h = 0 * 4 + 2.
+  EXPECT_EQ(poker::cardsJson("jsTS2h"), R"({"ok":true,"text":"Js Ts 2h","cards":[39,35,2]})");
+  EXPECT_EQ(poker::cardsJson("  "), R"({"ok":true,"text":"","cards":[]})");
+  EXPECT_EQ(poker::cardsJson("As As"), R"({"ok":false,"message":"invalid cards: As As"})");
+  EXPECT_EQ(poker::cardsJson("Js \"x"), R"({"ok":false,"message":"invalid cards: Js \"x"})");
+}
+
 TEST(Calculator, VersionComesFromTheBuild) {
   const std::string_view version = poker::version();
   EXPECT_FALSE(version.empty());
