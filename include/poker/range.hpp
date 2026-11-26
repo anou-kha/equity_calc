@@ -55,4 +55,12 @@ struct RangeError {
 // Spaces are ignored, ranks may be upper or lower case, and duplicates count once.
 std::variant<Range, RangeError> parseRange(std::string_view text);
 
+// Writes a range in standard notation, the reverse of parseRange(): parseRange(formatRange(r))
+// always gives back exactly r. Hand classes that are complete (all 6, 4 or 12 hands) are grouped
+// into runs, like "QQ+, JJ-99, ATs+, A5s-A2s, KQ" (no s/o when suited and offsuit match); any other
+// hands are listed one by one ("AsKs, AhKh"); all 1,326 hands are "random", and no hands are "".
+// The order is fixed (pairs, then by high card, suited before offsuit, then single hands), so equal
+// ranges always give the same text.
+std::string formatRange(const Range& range);
+
 }  // namespace poker

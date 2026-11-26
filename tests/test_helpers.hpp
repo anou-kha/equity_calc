@@ -13,12 +13,17 @@
 
 #include "poker/card.hpp"
 #include "poker/evaluator.hpp"
+#include "poker/range.hpp"
 
 namespace poker {
 
 // Let GoogleTest print hand ranks and categories readably in failure messages.
 inline void PrintTo(HandRank rank, std::ostream* os) { *os << describe(rank); }
 inline void PrintTo(HandCategory c, std::ostream* os) { *os << categoryName(c); }
+// Ranges print as their hand count and notation, instead of 192 raw bytes.
+inline void PrintTo(const Range& range, std::ostream* os) {
+  *os << range.size() << " hands: \"" << formatRange(range) << '"';
+}
 
 namespace test {
 

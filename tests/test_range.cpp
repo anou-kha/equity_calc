@@ -2,11 +2,14 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
+#include <random>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <variant>
+#include <vector>
 
 #include "poker/card.hpp"
 #include "poker/range.hpp"
@@ -142,6 +145,121 @@ TEST(RangeParsing, ErrorsNameTheBadEntry) {
     EXPECT_EQ(error.token, c.badEntry) << c.text;
     EXPECT_FALSE(error.reason.empty()) << c.text;
   }
+}
+
+// ---- Writing ranges: formatRange ----------------------------------------------------------------
+
+TEST(RangeFormatting, StandardRangesComeOutInStandardForm) {
+  struct Case {
+    std::string_view text;
+    std::string_view formatted;
+  };
+  const Case cases[] = {
+      {"QQ+, AKs", "QQ+, AKs"},
+      {"AKs, QQ+", "QQ+, AKs"},  // the order is fixed
+      {"AA", "AA"},
+      {"KK, AA", "KK+"},
+      {"22+", "22+"},
+      {"JJ-99", "JJ-99"},
+      {"55, 33, 22", "55, 33-22"},
+      {"ATs+", "ATs+"},
+      {"KQs, KJs, KTs", "KTs+"},  // a run up to the top kicker is written with "+"
+      {"A5s-A2s", "A5s-A2s"},
+      {"K9o-K6o", "K9o-K6o"},
+      {"AKs, AKo", "AK"},                        // suited and offsuit together
+      {"ATs+, ATo+", "AT+"},                     // ... also for runs
+      {"ATs+, AQo+", "ATs+, AQo+"},              // but not when they differ
+      {"KhAh", "AhKh"},                          // a single hand: higher card first
+      {"AhKh, AsKs, AdKd", "AsKs, AhKh, AdKd"},  // an incomplete class: hand by hand
+      {"AKs, AsKd", "AKs, AsKd"},
+      {"QQ+, AhAs", "QQ+"},  // a hand already in the range
+      {"any", "random"},
+  };
+  for (const Case& c : cases) EXPECT_EQ(poker::formatRange(range(c.text)), c.formatted) << c.text;
+  EXPECT_EQ(poker::formatRange(Range{}), "");
+}
+
+// parseRange(formatRange(r)) must give back exactly r, and writing that again the same text.
+void expectRoundTrip(const Range& original) {
+  const std::string text = poker::formatRange(original);
+  const Range back = range(text);
+  EXPECT_EQ(back, original) << text;
+  EXPECT_EQ(poker::formatRange(back), text);
+}
+
+// Every hand class's own name, like "AA", "AKs", "AKo" and "AK" (suited and offsuit).
+std::vector<std::string> everyClassName() {
+  constexpr std::string_view kRanks = "23456789TJQKA";
+  std::vector<std::string> names;
+  for (size_t high = 0; high < kRanks.size(); ++high) {
+    for (size_t low = 0; low <= high; ++low) {
+      const std::string name{kRanks[high], kRanks[low]};
+      if (high == low) {
+        names.push_back(name);
+      } else {
+        names.insert(names.end(), {name + "s", name + "o", name});
+      }
+    }
+  }
+  return names;
+}
+
+TEST(RangeFormatting, EveryHandClassIsWrittenAsItself) {
+  const std::vector<std::string> names = everyClassName();
+  EXPECT_EQ(names.size(), 13u + 78u * 3);
+  for (const std::string& name : names) {
+    EXPECT_EQ(poker::formatRange(range(name)), name);
+    expectRoundTrip(range(name));
+  }
+}
+
+TEST(RangeFormatting, EverySingleHandRoundTrips) {
+  for (int high = 1; high < poker::Card::kNumCards; ++high) {
+    for (int low = 0; low < high; ++low) {
+      Range single;
+      single.add({poker::Card::fromIndex(low), poker::Card::fromIndex(high)});
+      const std::string text = poker::formatRange(single);
+      EXPECT_EQ(text,
+                poker::Card::fromIndex(high).toString() + poker::Card::fromIndex(low).toString());
+      expectRoundTrip(single);
+    }
+  }
+}
+
+// Seeded random mixtures of whole classes and single hands, from sparse to almost everything.
+TEST(RangeFormatting, RandomRangesRoundTrip) {
+  const std::vector<std::string> names = everyClassName();
+  std::mt19937_64 rng(2026);  // raw output: the same ranges on every platform
+  for (int trial = 0; trial < 2000; ++trial) {
+    const uint64_t classOdds = 2 + static_cast<uint64_t>(trial % 5);  // 1 in 2 ... 1 in 6
+    Range mixed;
+    for (const std::string& name : names) {
+      if (rng() % classOdds == 0) {
+        // Not `for (... : range(name).combos())`: combos() is a view into the range, and a
+        // temporary range would be destroyed before the loop runs.
+        const Range wholeClass = range(name);
+        for (const poker::HoleCards& hand : wholeClass.combos()) mixed.add(hand);
+      }
+    }
+    for (int high = 1; high < poker::Card::kNumCards; ++high) {
+      for (int low = 0; low < high; ++low) {
+        if (rng() % 25 == 0) mixed.add({poker::Card::fromIndex(high), poker::Card::fromIndex(low)});
+      }
+    }
+    expectRoundTrip(mixed);
+    if (HasFailure()) return;  // one failing range is enough to see the problem
+  }
+}
+
+TEST(RangeFormatting, EverythingButOneHandIsNotRandom) {
+  const Range all = range("random");
+  Range almostAll;
+  for (const poker::HoleCards& hand : all.combos()) {
+    if (hand != hole("AsKs")) almostAll.add(hand);
+  }
+  EXPECT_EQ(almostAll.size(), 1325u);
+  EXPECT_NE(poker::formatRange(almostAll), "random");
+  expectRoundTrip(almostAll);
 }
 
 }  // namespace
