@@ -14,10 +14,12 @@
 #include "poker/card.hpp"
 #include "poker/equity.hpp"
 #include "poker/monte_carlo.hpp"
+#include "poker/range.hpp"
 #include "test_helpers.hpp"
 
 namespace {
 
+using poker::CardMask;
 using poker::EquityResult;
 using poker::HoleCards;
 using poker::MonteCarloResult;
@@ -102,6 +104,43 @@ TEST(MultithreadedExact, SmallJobsStaySingleThreaded) {
   const EquityResult result = exact(players, "Js Ts 2h", "", 8);
   EXPECT_EQ(result.threads, 1u);
   expectSameCounts(exact(players, "Js Ts 2h", "", 1), result);
+}
+
+TEST(MultithreadedExact, PostflopRangesMatchEveryDealAddedUp) {
+  // After the flop each deal of the hands is one task. AA, KK against QQ, JJ, AK on this flop is
+  // 240 deals x 990 boards = 237,600 boards, enough for 9 threads. On any number of them, the
+  // result must be every deal scored on its own, as known hands, and added up.
+  const CardMask board = cards("9h 5c 2d");
+  const std::vector<poker::Range> players = {
+      std::get<poker::Range>(poker::parseRange("AA, KK")),
+      std::get<poker::Range>(poker::parseRange("QQ, JJ, AK"))};
+  EquityResult reference;
+  reference.players.resize(2);
+  for (const HoleCards& first : players[0].combos()) {
+    for (const HoleCards& second : players[1].combos()) {
+      const auto deal = poker::exactEquity(std::vector{first, second}, board);
+      if (std::holds_alternative<poker::EquityError>(deal)) continue;  // they share a card
+      const EquityResult& counts = std::get<EquityResult>(deal);
+      for (size_t i = 0; i < 2; ++i) {
+        reference.players[i].wins += counts.players[i].wins;
+        reference.players[i].ties += counts.players[i].ties;
+        reference.players[i].tieShares += counts.players[i].tieShares;
+      }
+      reference.boards += counts.boards;
+      ++reference.deals;
+    }
+  }
+  EXPECT_EQ(reference.deals, 240u);
+  EXPECT_EQ(reference.boards, 237'600u);
+
+  for (const unsigned threads : {1u, 2u, 3u, 9u, 16u, 0u}) {
+    SCOPED_TRACE(threads);
+    const auto result =
+        std::get<EquityResult>(poker::exactEquity(players, board, 0, {.threads = threads}));
+    EXPECT_EQ(result.threads, expectedThreads(threads, 9));
+    EXPECT_EQ(result.deals, reference.deals);
+    expectSameCounts(reference, result);
+  }
 }
 
 TEST(MultithreadedExact, CompleteBoardIsOneTask) {
