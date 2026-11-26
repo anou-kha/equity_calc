@@ -70,6 +70,7 @@ endfunction()
 
 # ---- Core library ----------------------------------------------------------
 add_library(poker
+  src/calculator.cpp
   src/card.cpp
   src/equity.cpp
   src/evaluator.cpp
@@ -86,6 +87,7 @@ target_compile_options(poker PRIVATE
   $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Wconversion -Wshadow>
   $<$<CXX_COMPILER_ID:MSVC>:/W4>
 )
+target_compile_definitions(poker PRIVATE POKER_VERSION="${PROJECT_VERSION}")  # poker::version()
 
 # ---- CLI -------------------------------------------------------------------
 add_executable(poker_cli src/main.cpp)
@@ -106,6 +108,7 @@ if(POKER_BUILD_TESTS)
 
   enable_testing()
   add_executable(poker_tests
+    tests/test_calculator.cpp
     tests/test_card.cpp
     tests/test_equity.cpp
     tests/test_evaluator.cpp
