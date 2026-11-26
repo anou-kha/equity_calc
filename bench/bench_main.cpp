@@ -221,6 +221,23 @@ void benchRanges() {
             << 100.0 * equity.value << "% +/- " << 100.0 * equity.margin95() << "%)\n";
 }
 
+// Exact enumeration after the flop, on one thread like the web page. Each deal has only 990 boards
+// on a flop and 44 on a turn, so costs paid once per task show up here, not in the preflop rows.
+void benchExactPostflop(std::string_view first, std::string_view second, std::string_view board) {
+  constexpr int kTimedPasses = 3;
+  const std::vector<poker::Range> players = {rangeOf(first), rangeOf(second)};
+  const CardMask boardMask = poker::toMask(*poker::parseCards(board));
+  poker::EquityResult exact;
+  const double seconds = fastestPassSeconds(kTimedPasses, [&] {
+    exact =
+        std::get<poker::EquityResult>(poker::exactEquity(players, boardMask, 0, {.threads = 1}));
+  });
+  std::cout << std::fixed << std::setprecision(1) << "exact equity, " << first << " vs " << second
+            << " on " << board << ", 1 thread: " << seconds * 1000.0 << " ms  (" << exact.deals
+            << " deals, " << exact.boards << " boards, "
+            << static_cast<double>(exact.boards) / seconds / 1e6 << " M boards/s)\n";
+}
+
 }  // namespace
 
 int main() {
@@ -230,6 +247,8 @@ int main() {
   benchTableBuild();
   benchEvaluators();
   benchExactEquityPreflop();
+  benchExactPostflop("AsKs", "random", "Js Ts 2h");
+  benchExactPostflop("QQ+, AKs", "random", "Js Ts 2h 5c");
   const auto aces = *poker::parseHoleCards("AsAh");
   const auto kings = *poker::parseHoleCards("KsKh");
   benchMonteCarlo("AsAh vs KsKh preflop", {aces, kings}, 0);
