@@ -409,8 +409,9 @@ makes the compiler build one loop per scorer. Exact enumeration chooses once per
 | Monte Carlo QQ+, AKs vs random, 10M trials | 142.9 ms | 131.3 ms (−8%) |
 | Monte Carlo, three players (control) | 93.8 ms | 92.5 ms (noise) |
 
-Exact enumeration on a flop gains only about 2%: each board is then so cheap that rebuilding the
-remaining deck for every one of them dominates, which is the next thing to optimise.
+Exact enumeration on a flop gained only about 2%: each board is then so cheap that rebuilding the
+remaining deck for every one of them dominated. Section 6 ("Tasks can be too small, too") fixes
+that.
 
 ## 5. Monte Carlo equity
 
@@ -547,7 +548,8 @@ Two rules make the result independent of the number of threads:
 1. **Split the work into tasks whose result depends only on the task's number,** never on which
    thread runs it or when. For Monte Carlo a task is a 65,536-trial chunk, and chunk `c` always uses
    random stream `mixSeed(seed, c)` and the same starting deck, exactly as section 5 set up. For
-   exact enumeration a task is "every board that starts with these two missing cards".
+   exact enumeration a task is "every board that starts with these two missing cards" preflop,
+   and one deal's boards after the flop.
 2. **Keep the totals as integers and combine them at the end.** Integer addition gives the same
    answer in any order, so it doesn't matter which thread finishes first.
 
@@ -596,6 +598,38 @@ core's speed, so that one task alone takes about 2 × 10% × 67 ms ≈ 13 ms. Th
 time measured (about 12 ms, 5–6×): everyone else finished and waited. Splitting by the first *two*
 missing cards gives 990 tasks, the biggest under 1% of the work, and 16 threads then reached about
 7×. The general lesson: the speedup can't beat total time ÷ the longest single task.
+
+### Tasks can be too small, too
+
+The two-card split was right preflop, but it was also used after the flop, where only two cards
+(flop) or one (turn) are missing. Fixing them left **one board per task**, and every task first
+rebuilt the remaining deck, a scan of all 52 cards, before scoring that one board. After the flop,
+exact enumeration ran at about 8 M boards/s, against 35 M preflop: setting a task up took about
+three times as long as scoring its board. This hardly showed with known hands, where a flop is 990
+boards and a fraction of a millisecond, but it made range-against-range flops slow, and those are
+exactly what the web page enumerates, on a single thread.
+
+Now a deal is only split preflop. After the flop **each deal is one task**: the deck is built once
+for its 990 (or 44) boards. The threads still finish together: each needs at least 25,000 boards
+and a deal has at most 990, so every thread gets at least 25 tasks, all the same size. The results
+can't change, since the totals are integers, and a test checks that a flop with ranges gives, on
+any number of threads, exactly the sum of every deal scored on its own.
+
+| Release, MSVC, median of 7 alternating pairs | Before | After |
+|---|---:|---:|
+| Exact AsKs vs random on a flop (1,081 deals × 990 boards), 1 thread | 137.6 ms | 30.5 ms (4.5×) |
+| Exact QQ+, AKs vs random on a turn (22,770 deals × 44 boards), 1 thread | 126.6 ms | 30.7 ms (4.1×) |
+| Exact QQ+, AKs vs random on a flop (23.5M boards), 1 thread, median of 3 | 3,420 ms | 688 ms (5.0×) |
+| The same, 16 threads, median of 5 | 443 ms | 111 ms (4.0×) |
+| Exact AsAh vs KsKh preflop (control: unchanged split) | 51.1 ms | 49.7 ms (noise) |
+
+Both postflop rows now run at about the preflop speed. The web page's module (WebAssembly, timed
+in Node, median of 7 alternating pairs) gained less, because there the old setup cost less
+compared with scoring a board: the flop row went from 82.6 to 36.2 ms (2.3×) and the turn row
+from 83.7 to 40.3 ms (2.1×), with preflop unchanged (64.2 and 63.9 ms).
+
+The lesson mirrors the one above: a task should be big enough that its setup is negligible, and no
+bigger than load balancing allows.
 
 ### Results, and why not 16×
 
@@ -725,9 +759,10 @@ twice) combined with every board:
 - **Why plain counting is still correct:** every deal uses exactly two cards per player, so every
   deal leaves the same number of cards to complete the board from, and every (deal, board) pair is
   equally likely. The integer totals simply add up across deals, with no weighting needed.
-- **Threads:** the tasks become (deal, board prefix) pairs. A prefix is stored as two *deck
-  positions* rather than two cards, because each deal leaves a different deck, but always one of
-  the same size. Everything in section 6 then applies unchanged.
+- **Threads:** the tasks become (deal, board prefix) pairs preflop, and whole deals after the flop
+  (section 6). A prefix is stored as two *deck positions* rather than two cards, because each deal
+  leaves a different deck, but always one of the same size. Everything in section 6 then applies
+  unchanged.
 - **Cost:** AA vs KK is 36 deals × 1,712,304 boards ≈ 61.6 million showdowns, about 0.35 s on 16
   threads. `exactShowdowns()` computes that count up front (stopping once it passes a limit, since
   counting the deals of wide ranges takes time too), which is how the CLI chooses a method: exact
@@ -1079,6 +1114,12 @@ deals the same boards, and prints the same numbers, on every platform.
   one core get about 1.3–1.5×, not 2× (measured by pinning them). A laptop also runs fewer busy cores
   at higher clocks. And for exact enumeration, the speedup can't beat total time ÷ the biggest task,
   which is why it splits by the first two missing cards (990 tasks), not one (44 uneven tasks).
+- **How big should a task be?** Big enough that setting it up is negligible, small enough that the
+  threads finish together. Preflop, one deal is 1.7M boards and must be split. After the flop it's
+  at most 990 boards, and splitting it made every task a single board, with a deck rebuild that
+  cost three times the scoring. Making each deal one task made range spots after the flop 4–5×
+  faster natively and about 2× faster on the web page, and each thread still gets at least 25
+  equal tasks.
 - **Why not a thread pool?** Starting threads costs well under a millisecond, small next to the work.
   A pool pays off for many tiny calls, and adds complexity.
 - **Tell me about a hard bug.** Single-threaded Monte Carlo got 25% slower after the threading

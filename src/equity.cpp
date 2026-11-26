@@ -164,12 +164,16 @@ std::variant<EquityResult, EquityError> exactEquity(std::span<const Range> playe
   const size_t missing = detail::missingBoardCards(board);
   const auto deckSize = static_cast<size_t>(detail::cardsLeftAfterDeal(board, dead, numPlayers));
 
-  // Tasks are (deal, prefix) pairs, where a prefix fixes the first two missing cards (heads-up
-  // preflop: 990 prefixes per deal). Splitting by just the first card would give only 44 tasks
-  // for a known hand, and the biggest (178,365 boards, over 10% of the work) would leave the other
-  // threads waiting at the end; with two cards the biggest task is under 1%. A complete board
-  // (nothing missing) is a single prefix.
-  const size_t prefixLength = std::min<size_t>(missing, 2);
+  // Tasks are (deal, prefix) pairs, where a prefix fixes the first few missing cards.
+  //  - Preflop, a deal has 1,712,304 boards heads-up, so it's split by the first two missing cards
+  //    (990 prefixes). Splitting by just the first would give 44 tasks for a known hand, and the
+  //    biggest (178,365 boards, over 10% of the work) would leave the other threads waiting at the
+  //    end; with two cards the biggest task is under 1%.
+  //  - After the flop, a deal has at most 990 boards, so each deal is one task (an empty prefix).
+  //    Splitting it further would make most tasks a single board, each rebuilding the deck first,
+  //    which took longer than scoring the board. The threads still finish together: each gets at
+  //    least 25,000 boards (kMinBoardsPerThread), so at least 25 equally sized deals.
+  const size_t prefixLength = board == 0 ? 2 : 0;
   std::vector<Prefix> prefixes;
   addPrefixes(deckSize, missing, prefixLength, 0, Prefix{}, prefixes);
   const uint64_t numTasks = deals.size() * prefixes.size();
