@@ -147,11 +147,38 @@
     </p>
   </footer>
 
+  <dialog id="range-picker" class="picker" aria-labelledby="range-picker-title" tabindex="-1">
+    <div class="picker-header">
+      <h2 id="range-picker-title">Range</h2>
+      <span id="range-picker-count" class="picker-count" aria-live="polite"></span>
+    </div>
+    <p class="hint">Click or drag across hands to add or remove them: pairs on the diagonal,
+      suited hands above it, offsuit below.</p>
+    <p id="range-picker-note" class="error"></p>
+    <div id="hand-grid" class="hand-grid"></div>
+    <div class="suit-row">
+      <span id="suit-row-label" class="suit-row-label"></span>
+      <div id="suit-buttons" class="suit-buttons"></div>
+    </div>
+    <div class="quick-buttons">
+      <button type="button" class="secondary" data-quick="pairs">+ Pairs</button>
+      <button type="button" class="secondary" data-quick="broadway">+ Broadway</button>
+      <button type="button" class="secondary" data-quick="suited-aces">+ Suited aces</button>
+      <button type="button" class="secondary" data-quick="clear">Clear</button>
+    </div>
+    <p class="picker-text"><code id="range-picker-text"></code></p>
+    <div class="actions">
+      <button type="button" id="range-picker-use">Use range</button>
+      <button type="button" id="range-picker-cancel" class="secondary">Cancel</button>
+    </div>
+  </dialog>
+
   <template id="player-template">
     <div class="player">
       <label class="player-label"></label>
-      <div class="player-input">
+      <div class="input-row">
         <input class="range" autocomplete="off" spellcheck="false">
+        <button type="button" class="pick secondary">Pick</button>
         <button type="button" class="remove secondary" aria-label="Remove player">×</button>
       </div>
       <p class="error"></p>

@@ -4,6 +4,8 @@
 // Everything typed into the page is shown with textContent, never innerHTML, so input like
 // "<img onerror=...>" is displayed as text and can't add markup or scripts to the page.
 
+import { openRangePicker } from "./range_picker.js";
+
 const MIN_PLAYERS = 2;
 const MAX_PLAYERS = 9;
 
@@ -51,7 +53,17 @@ function playerRows() {
 
 function addPlayer(range = "") {
   const row = playerTemplate.content.firstElementChild.cloneNode(true);
-  row.querySelector(".range").value = range;
+  const input = row.querySelector(".range");
+  input.value = range;
+  row.querySelector(".pick").addEventListener("click", () => {
+    openRangePicker({
+      title: `${row.querySelector(".player-label").textContent}'s range`,
+      text: input.value,
+      use: (text) => {
+        input.value = text;
+      },
+    });
+  });
   row.querySelector(".remove").addEventListener("click", () => {
     row.remove();
     renumberPlayers();
@@ -82,6 +94,7 @@ function renumberPlayers() {
     const label = row.querySelector(".player-label");
     label.htmlFor = id;
     label.textContent = `Player ${i + 1}`;
+    row.querySelector(".pick").setAttribute("aria-label", `Pick player ${i + 1}'s range`);
     const remove = row.querySelector(".remove");
     remove.setAttribute("aria-label", `Remove player ${i + 1}`);
     remove.hidden = rows.length <= MIN_PLAYERS;
