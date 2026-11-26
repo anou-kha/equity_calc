@@ -124,6 +124,39 @@ if(POKER_BUILD_TESTS)
   poker_copy_asan_runtime(poker_tests)
   include(GoogleTest)
   gtest_discover_tests(poker_tests)
+
+  # End-to-end tests of the real poker_cli: run it with some arguments, then check the exit code
+  # and that the output matches a CMake regular expression (in which [.] is a literal dot).
+  #   poker_cli_test(<name> <expected exit code> <pattern> <arguments...>)
+  function(poker_cli_test name exit_code pattern)
+    string(JOIN "|" command $<TARGET_FILE:poker_cli> ${ARGN})
+    add_test(NAME cli.${name}
+      COMMAND ${CMAKE_COMMAND} -DCOMMAND=${command} -DEXIT_CODE=${exit_code}
+        -DPATTERN=${pattern} -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_cli.cmake)
+  endfunction()
+
+  poker_cli_test(Version 0 "^poker_cli [0-9]+[.][0-9]+[.][0-9]+" --version)
+  poker_cli_test(Help 0 "Usage: poker_cli.*QQ[+].*--json" --help)
+  poker_cli_test(NoArgumentsPrintsUsage 1 "^usage: poker_cli")
+  poker_cli_test(KnownHandsOnTheFlop 0 "AsKs .*QhQd .*990 boards enumerated"
+    AsKs QhQd --board Js Ts 2h)
+  poker_cli_test(RangesAreEnumerated 0
+    "Range .*QQ[+], AKs +22 .*JJ-99 +18 .*320,760 showdowns [(]324 deals"
+    "QQ+, AKs" JJ-99 --board Ah 7d 2c)
+  poker_cli_test(MonteCarloShowsSeedAndMargin 0
+    "95% margin.*[+]/- .*Monte Carlo: 20,000 random boards [(]seed 7[)]"
+    AsKs QhQd --trials 20000 --seed 7)
+  poker_cli_test(Json 0 "^{.ok.:true,.method.:.exact.,.*,.players.:[[]{.range.:.AsKs.,"
+    AsKs QhQd --board Js Ts 2h --json)
+  poker_cli_test(JsonError 1 "^{.ok.:false,.field.:.range.,.player.:1," AsKs AKx --json)
+  poker_cli_test(InvalidRange 1 "error: invalid range .QQ[+], AKx. at .AKx." AsKs "QQ+, AKx")
+  poker_cli_test(InvalidBoard 1 "error: invalid board cards: Js Ts 2x" AsKs QhQd --board Js Ts 2x)
+  poker_cli_test(DuplicateCard 1 "error: the same card appears more than once" AsAh AsAh)
+  poker_cli_test(TooManyDealsForExact 1 "error: too many deals of the hands to enumerate exactly"
+    random random random --exact)
+  poker_cli_test(UnknownOption 1 "unknown option: --bogus" AsKs QhQd --bogus)
+  poker_cli_test(ExactWithTrials 1 "--exact can't be combined" AsKs QhQd --exact --trials 5)
+  poker_cli_test(BadNumber 1 "--trials needs a whole number" AsKs QhQd --trials 1e6)
 endif()
 
 # ---- Benchmarks ------------------------------------------------------------
