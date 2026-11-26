@@ -98,6 +98,12 @@ using PotShares = std::array<uint64_t, kMaxPlayers>;
 
 PotShares showdown(CardMask board, std::span<const CardMask> holes);
 
+// Scores a two-player deal straight into the counters, with the same result as showdown() plus
+// addToCounts() but faster: two evaluations and one comparison. A tie always pays each player
+// half. showdown() stays the general version, used for three or more players and as the
+// reference in tests (test_heads_up.cpp).
+void addHeadsUpShowdown(CardMask board, const Seats& seats, std::span<PlayerResult, 2> counts);
+
 // Adds one showdown to the per-player counts: a whole pot is a win, part of a pot is a tie.
 void addToCounts(const PotShares& shares, std::span<PlayerResult> counts);
 

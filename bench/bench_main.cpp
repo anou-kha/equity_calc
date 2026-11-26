@@ -9,6 +9,7 @@
 #include <iomanip>
 #include <iostream>
 #include <random>
+#include <string_view>
 #include <thread>
 #include <variant>
 #include <vector>
@@ -111,21 +112,18 @@ void benchExactEquityPreflop() {
             << static_cast<double>(boards) / seconds / 1e6 << " M boards/s)\n";
 }
 
-// The same spot by Monte Carlo, to compare with exact enumeration: how long 1M random boards take,
-// and how precise the answer is.
-void benchMonteCarloPreflop() {
+// One million single-threaded showdowns, with the same trial count and seed for every spot.
+void benchMonteCarlo(std::string_view spot, const std::vector<poker::HoleCards>& players,
+                     CardMask board) {
   constexpr int kTimedPasses = 3;
   constexpr uint64_t kTrials = 1'000'000;
-  const std::vector<poker::HoleCards> players = {*poker::parseHoleCards("AsAh"),
-                                                 *poker::parseHoleCards("KsKh")};
-
   poker::Estimate equity;
   const double seconds = fastestPassSeconds(kTimedPasses, [&] {
-    const auto outcome = poker::monteCarloEquity(players, 0, 0, {.trials = kTrials, .seed = 1});
+    const auto outcome = poker::monteCarloEquity(players, board, 0, {.trials = kTrials, .seed = 1});
     equity = std::get<poker::MonteCarloResult>(outcome).equity(0);
   });
 
-  std::cout << "monte carlo, AsAh vs KsKh preflop: " << std::fixed << std::setprecision(1)
+  std::cout << "monte carlo, " << spot << ": " << std::fixed << std::setprecision(1)
             << seconds * 1000.0 << " ms  (" << kTrials << " trials, "
             << static_cast<double>(kTrials) / seconds / 1e6 << " M trials/s, AsAh equity "
             << std::setprecision(2) << 100.0 * equity.value << "% +/- " << 100.0 * equity.margin95()
@@ -232,7 +230,13 @@ int main() {
   benchTableBuild();
   benchEvaluators();
   benchExactEquityPreflop();
-  benchMonteCarloPreflop();
+  const auto aces = *poker::parseHoleCards("AsAh");
+  const auto kings = *poker::parseHoleCards("KsKh");
+  benchMonteCarlo("AsAh vs KsKh preflop", {aces, kings}, 0);
+  // Every trial splits on this river. No draws are needed, so scoring dominates.
+  benchMonteCarlo("AsAh vs KsKh, royal flush on board", {aces, kings},
+                  poker::toMask(*poker::parseCards("Tc Jc Qc Kc Ac")));
+  benchMonteCarlo("AsAh vs KsKh vs QsQh preflop", {aces, kings, *poker::parseHoleCards("QsQh")}, 0);
   benchThreadScaling();
   benchRanges();
   return 0;

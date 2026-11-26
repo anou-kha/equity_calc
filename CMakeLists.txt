@@ -192,6 +192,7 @@ if(POKER_BUILD_TESTS AND POKER_BUILD_PROGRAMS)
     tests/test_equity.cpp
     tests/test_evaluator.cpp
     tests/test_fast_evaluator.cpp
+    tests/test_heads_up.cpp
     tests/test_monte_carlo.cpp
     tests/test_multithreading.cpp
     tests/test_random.cpp
