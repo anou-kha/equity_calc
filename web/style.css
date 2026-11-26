@@ -428,31 +428,35 @@ footer {
 }
 
 .suit-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
   margin-top: 12px;
 }
 
 .suit-row-label {
+  display: block;
+  margin-bottom: 6px;
   color: var(--muted);
   font-size: 0.9rem;
 }
 
-.suit-buttons,
-.quick-buttons {
-  display: flex;
-  flex-wrap: wrap;
+/* Always room for 12 single hands (an offsuit class has 12, a pair 6, a suited class 4) in two
+   rows of six, so the panel keeps its height, and the grid stays under the pointer, whichever
+   class is shown. */
+.suit-buttons {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-rows: repeat(2, 2.25rem);
   gap: 6px;
 }
 
 .quick-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
   margin-top: 12px;
 }
 
 .suit-hand {
-  padding: 4px 8px;
+  padding: 0 4px;
   background: transparent;
   border-color: var(--border);
   color: var(--text);
@@ -474,6 +478,13 @@ footer {
   border-radius: 6px;
   background: var(--background);
   overflow-wrap: anywhere;
+}
+
+/* Room for three lines of range text; a longer range scrolls inside the box, so the panel doesn't
+   grow while you pick. */
+#range-picker .picker-text {
+  height: calc(4.5em + 16px);
+  overflow-y: auto;
 }
 
 .picker .actions {
@@ -562,5 +573,9 @@ footer a {
 
   .card-cell {
     font-size: 0.68rem;
+  }
+
+  .suit-hand {
+    font-size: 0.85rem;  /* six to a row still fit, like "A♠K♥" */
   }
 }

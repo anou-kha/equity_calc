@@ -296,6 +296,16 @@ async function runTests() {
   assert.deepEqual(await suitButtons(), ["AcKc", "AdKd", "AhKh", "AsKs*"]);
   await screenshot("picker-desktop.png");
 
+  // The panel keeps its height whichever class's single hands it shows (a pair has 6, an offsuit
+  // class 12, a suited one 4), so the grid doesn't move under the pointer while picking.
+  const pickerHeight = () => page(`${el("range-picker")}.getBoundingClientRect().height`);
+  const steadyHeight = await pickerHeight();
+  for (const name of ["AA", "AKo", "AKs"]) {
+    await page(`document.querySelector('${await cell(name)}').click()`);
+    assert.equal(await text("suit-row-label"), `Single hands of ${name}:`);
+    assert.equal(await pickerHeight(), steadyHeight, `the panel changed height at ${name}`);
+  }
+
   // Dragging across cells adds whole classes; a drag that starts on a chosen cell removes.
   await quick("clear");
   await drag(["AKs", "AQs", "AJs"]);
@@ -337,6 +347,20 @@ async function runTests() {
   await waitFor(pickerOpen, "the picker for player 2");
   assert.match(await text("range-picker-note"), /couldn't be read: invalid range .* at "AKx"/);
   assert.equal(await text("range-picker-count"), "0 hands · 0.0%");
+  await click("range-picker-cancel");
+
+  // A long range (42 single hands, four lines of text) scrolls inside its box instead of making
+  // the panel taller.
+  const longRange = [..."AKQJT9"]
+                        .flatMap((high) => [..."2345678"].map((kicker) => `${high}h${kicker}d`))
+                        .join(", ");
+  await type("player-2", longRange);
+  await page("document.querySelectorAll('.player .pick')[1].click()");
+  await waitFor(pickerOpen, "the picker with a long range");
+  assert.equal(await text("range-picker-count"), "42 hands · 3.2%");
+  assert.equal(await page(`${el("range-picker-text")}.parentElement.scrollHeight >
+                           ${el("range-picker-text")}.parentElement.clientHeight`), true);
+  assert.equal(await pickerHeight(), steadyHeight, "a long range made the panel taller");
   await click("range-picker-cancel");
 
   // ---- The card picker ----
