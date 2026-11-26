@@ -18,6 +18,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <span>
 #include <vector>
 
@@ -123,6 +124,8 @@ std::string_view toString(EquityError error) {
       return "a range has no hands left once the board and dead cards are taken out";
     case EquityError::kNoValidDeal:
       return "the ranges can't all be dealt at once (they need the same cards)";
+    case EquityError::kTooManyDeals:
+      return "too many deals of the hands to enumerate exactly (over 4,194,304); use Monte Carlo";
   }
   return "unknown error";
 }
@@ -142,12 +145,20 @@ std::variant<EquityResult, EquityError> exactEquity(std::span<const Range> playe
   if (const auto* error = std::get_if<EquityError>(&prepared)) return *error;
   const auto& hands = std::get<detail::LiveHands>(prepared);
 
+  // The deals are listed before any board is enumerated, so that threads can take (deal, prefix)
+  // tasks by number. Counting them first (stopping just past the limit) keeps a spot with billions
+  // of deals from trying to list them all and running out of memory.
+  uint64_t numDeals = 0;
+  detail::forEachDeal(hands, [&](const detail::Seats&) { return ++numDeals <= kMaxExactDeals; });
+  if (numDeals == 0) return detail::noValidDealError(players);
+  if (numDeals > kMaxExactDeals) return EquityError::kTooManyDeals;
+
   std::vector<detail::Seats> deals;
+  deals.reserve(static_cast<size_t>(numDeals));
   detail::forEachDeal(hands, [&](const detail::Seats& seats) {
     deals.push_back(seats);
     return true;
   });
-  if (deals.empty()) return detail::noValidDealError(players);
 
   const size_t numPlayers = players.size();
   const size_t missing = detail::missingBoardCards(board);
@@ -207,9 +218,10 @@ uint64_t exactShowdowns(std::span<const Range> players, CardMask board, CardMask
   const auto deckSize =
       static_cast<uint64_t>(detail::cardsLeftAfterDeal(board, dead, hands.size()));
   const uint64_t boardsPerDeal = binomial(deckSize, detail::missingBoardCards(board));
-  const uint64_t maxDeals = limit / boardsPerDeal;
+  const uint64_t maxDeals = std::min(limit / boardsPerDeal, kMaxExactDeals);
   uint64_t deals = 0;
   detail::forEachDeal(hands, [&](const detail::Seats&) { return ++deals <= maxDeals; });
+  if (deals > kMaxExactDeals) return std::numeric_limits<uint64_t>::max();  // exactEquity() refuses
   return deals * boardsPerDeal;
 }
 

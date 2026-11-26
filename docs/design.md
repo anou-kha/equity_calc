@@ -665,6 +665,13 @@ twice) combined with every board:
   threads. `exactShowdowns()` computes that count up front (stopping once it passes a limit, since
   counting the deals of wide ranges takes time too), which is how the CLI chooses a method: exact
   up to 200 million showdowns, Monte Carlo beyond.
+- **A limit on deals:** so that threads can take tasks by number, the deals are listed in memory
+  before any board is enumerated, at 88 bytes each. Three random hands preflop have about 1.8
+  billion deals, a 160 GB list, and asking for that exactly used to crash: the browser test found
+  it in step 8. Now the deals are counted first, stopping just past `kMaxExactDeals` (2²² ≈ 4.2
+  million, a list of about 370 MB), and bigger spots get the error `kTooManyDeals`, which says to
+  use Monte Carlo. `exactShowdowns()` returns "more than any limit" for them, so the automatic
+  choice always picks Monte Carlo. Spots under the limit behave exactly as before.
 
 ### Monte Carlo: rejection sampling
 

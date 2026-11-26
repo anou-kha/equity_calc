@@ -107,9 +107,9 @@ Exact enumeration would take over 200,000,000 showdowns; --exact forces it.
 The true equity is within the margin for 95% of seeds.
 ```
 
-- `--exact` forces exact enumeration; `--trials <n>` asks for Monte Carlo with `n` trials, and
-  `--seed <n>` picks its random stream (default 1). The same command and seed always print the same
-  numbers.
+- `--exact` forces exact enumeration (of up to 4,194,304 deals of the hands); `--trials <n>` asks
+  for Monte Carlo with `n` trials, and `--seed <n>` picks its random stream (default 1). The same
+  command and seed always print the same numbers.
 - `--board` takes 0, 3, 4 or 5 cards; `--dead` takes cards that can't be dealt (e.g. folded or
   exposed). Both read every following argument up to the next option, so `Js Ts 2h` and `JsTs2h`
   both work.
