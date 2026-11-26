@@ -54,11 +54,42 @@ jobs:
         env:
           TSAN_OPTIONS: halt_on_error=1  # fail at the first race report
 
+  # The library compiled to WebAssembly with Emscripten, run by Node.js: the whole test suite (in
+  # a build with threads), then the single-threaded browser module's smoke test. See the
+  # WebAssembly section in CMakeLists.txt for why there are two builds.
+  webassembly:
+    runs-on: ubuntu-latest
+    env:
+      EMSDK_VERSION: 7.0.1  # the Emscripten version, pinned so builds are reproducible
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Emscripten
+        run: |
+          git clone --depth 1 https://github.com/emscripten-core/emsdk.git "$RUNNER_TEMP/emsdk"
+          "$RUNNER_TEMP/emsdk/emsdk" install "$EMSDK_VERSION"
+          "$RUNNER_TEMP/emsdk/emsdk" activate "$EMSDK_VERSION"
+
+      - name: Tests, CLI and benchmarks, with threads
+        run: |
+          source "$RUNNER_TEMP/emsdk/emsdk_env.sh"
+          emcmake cmake -S . -B build-wasm-threads -DCMAKE_BUILD_TYPE=Release \
+            -DPOKER_WASM_THREADS=ON
+          cmake --build build-wasm-threads --parallel
+          ctest --test-dir build-wasm-threads --output-on-failure
+
+      - name: Browser module
+        run: |
+          source "$RUNNER_TEMP/emsdk/emsdk_env.sh"
+          emcmake cmake -S . -B build-wasm -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-wasm --parallel
+          ctest --test-dir build-wasm --output-on-failure
+
   format:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Check formatting
         run: |
-          find include src tests bench -name '*.hpp' -o -name '*.cpp' \
+          find include src tests bench wasm -name '*.hpp' -o -name '*.cpp' \
             | xargs clang-format --dry-run --Werror
